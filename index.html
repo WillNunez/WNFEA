@@ -1,0 +1,927 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>3D Beam Finite Element Analysis (FEA) Engine Documentation</title>
+    <meta name="description" content="Comprehensive engineering documentation for the 3D Beam Finite Element Analysis (FEA) engine with custom Von Mises stress mapping, local coordinate rotations, and cylinder tube visualization.">
+    <!-- Google Fonts: Outfit and Fira Code -->
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Fira+Code:wght@400;500;600&family=Outfit:wght@300;400;500;600;700;800&display=swap" rel="stylesheet">
+    <!-- Lucide Icons -->
+    <script src="https://unpkg.com/lucide@latest"></script>
+    <!-- MathJax Configuration and Script for rendering LaTeX equations -->
+    <script>
+        window.MathJax = {
+            tex: {
+                inlineMath: [['$', '$'], ['\\(', '\\)']],
+                displayMath: [['$$', '$$'], ['\\[', '\\]']],
+                processEscapes: true
+            },
+            options: {
+                skipHtmlTags: ['script', 'noscript', 'style', 'textarea', 'pre', 'code']
+            }
+        };
+    </script>
+    <script id="MathJax-script" async src="https://cdn.jsdelivr.net/npm/mathjax@3/es5/tex-mml-chtml.js"></script>
+    <style>
+        :root {
+            --bg-primary: #0b0f19;
+            --bg-secondary: #131a2b;
+            --bg-accent: #1e2942;
+            --glass-bg: rgba(30, 41, 66, 0.4);
+            --glass-border: rgba(255, 255, 255, 0.06);
+            --text-primary: #f3f4f6;
+            --text-secondary: #9ca3af;
+            --brand-cyan: #06b6d4;
+            --brand-blue: #3b82f6;
+            --brand-purple: #8b5cf6;
+            --brand-gradient: linear-gradient(135deg, #06b6d4 0%, #3b82f6 50%, #8b5cf6 100%);
+            --card-gradient: linear-gradient(145deg, #131a2b 0%, #17223b 100%);
+            --shadow-glow: 0 0 30px rgba(6, 182, 212, 0.15);
+            --font-primary: 'Outfit', sans-serif;
+            --font-mono: 'Fira Code', monospace;
+            --transition-smooth: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+        }
+
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            font-family: var(--font-primary);
+            background-color: var(--bg-primary);
+            color: var(--text-primary);
+            line-height: 1.6;
+            overflow-x: hidden;
+        }
+
+        /* Ambient Glow Blobs */
+        .glow-blob {
+            position: absolute;
+            border-radius: 50%;
+            filter: blur(140px);
+            z-index: -1;
+            opacity: 0.25;
+            pointer-events: none;
+        }
+        .blob-1 {
+            top: 5%;
+            left: 10%;
+            width: 400px;
+            height: 400px;
+            background: var(--brand-cyan);
+        }
+        .blob-2 {
+            top: 40%;
+            right: 5%;
+            width: 500px;
+            height: 500px;
+            background: var(--brand-purple);
+        }
+        .blob-3 {
+            bottom: 10%;
+            left: 20%;
+            width: 450px;
+            height: 450px;
+            background: var(--brand-blue);
+        }
+
+        header {
+            position: relative;
+            padding: 6rem 2rem 4rem;
+            max-width: 1200px;
+            margin: 0 auto;
+            text-align: center;
+        }
+
+        .logo-container {
+            display: inline-flex;
+            align-items: center;
+            gap: 0.75rem;
+            padding: 0.5rem 1.25rem;
+            background: var(--glass-bg);
+            border: 1px solid var(--glass-border);
+            border-radius: 50px;
+            margin-bottom: 2rem;
+            backdrop-filter: blur(8px);
+        }
+
+        .logo-icon {
+            color: var(--brand-cyan);
+            animation: pulse-slow 3s infinite alternate;
+        }
+
+        .logo-text {
+            font-weight: 600;
+            font-size: 0.9rem;
+            letter-spacing: 0.1em;
+            text-transform: uppercase;
+            background: var(--brand-gradient);
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
+        }
+
+        h1 {
+            font-size: 3.5rem;
+            font-weight: 800;
+            line-height: 1.15;
+            margin-bottom: 1.5rem;
+            letter-spacing: -0.03em;
+            background: var(--brand-gradient);
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
+        }
+
+        .subtitle {
+            font-size: 1.25rem;
+            color: var(--text-secondary);
+            max-width: 800px;
+            margin: 0 auto 2.5rem;
+            font-weight: 300;
+        }
+
+        .badge-grid {
+            display: flex;
+            justify-content: center;
+            gap: 1rem;
+            flex-wrap: wrap;
+        }
+
+        .badge {
+            display: flex;
+            align-items: center;
+            gap: 0.5rem;
+            padding: 0.6rem 1.2rem;
+            background: var(--bg-secondary);
+            border: 1px solid var(--glass-border);
+            border-radius: 10px;
+            font-size: 0.9rem;
+            font-weight: 500;
+            color: var(--text-primary);
+        }
+
+        .badge i {
+            color: var(--brand-cyan);
+        }
+
+        /* Container Layout */
+        .doc-layout {
+            max-width: 1400px;
+            margin: 0 auto;
+            display: grid;
+            grid-template-columns: 280px 1fr;
+            gap: 3rem;
+            padding: 2rem;
+        }
+
+        /* Sidebar Navigation */
+        .sidebar {
+            position: sticky;
+            top: 2rem;
+            height: calc(100vh - 4rem);
+            overflow-y: auto;
+            background: var(--glass-bg);
+            border: 1px solid var(--glass-border);
+            border-radius: 20px;
+            padding: 2rem 1.5rem;
+            backdrop-filter: blur(12px);
+        }
+
+        .sidebar h3 {
+            font-size: 0.85rem;
+            text-transform: uppercase;
+            letter-spacing: 0.15em;
+            color: var(--brand-cyan);
+            margin-bottom: 1.25rem;
+        }
+
+        .sidebar-menu {
+            list-style: none;
+        }
+
+        .sidebar-item {
+            margin-bottom: 0.5rem;
+        }
+
+        .sidebar-link {
+            display: flex;
+            align-items: center;
+            gap: 0.75rem;
+            padding: 0.75rem 1rem;
+            color: var(--text-secondary);
+            text-decoration: none;
+            border-radius: 10px;
+            font-size: 0.95rem;
+            font-weight: 500;
+            transition: var(--transition-smooth);
+        }
+
+        .sidebar-link:hover, .sidebar-link.active {
+            color: var(--text-primary);
+            background: var(--bg-accent);
+            border-left: 3px solid var(--brand-cyan);
+        }
+
+        /* Main Content */
+        main {
+            min-width: 0; /* Prevents flexbox / grid overflow */
+        }
+
+        section {
+            background: var(--card-gradient);
+            border: 1px solid var(--glass-border);
+            border-radius: 24px;
+            padding: 3rem;
+            margin-bottom: 3rem;
+            position: relative;
+            box-shadow: 0 10px 30px rgba(0,0,0,0.2);
+            transition: var(--transition-smooth);
+        }
+
+        section:hover {
+            box-shadow: 0 15px 40px rgba(0,0,0,0.3), 0 0 20px rgba(6,182,212,0.05);
+        }
+
+        .section-header {
+            display: flex;
+            align-items: center;
+            gap: 1rem;
+            margin-bottom: 2rem;
+            border-bottom: 1px solid var(--glass-border);
+            padding-bottom: 1rem;
+        }
+
+        .section-icon {
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            width: 45px;
+            height: 45px;
+            background: var(--glass-bg);
+            border: 1px solid rgba(6, 182, 212, 0.3);
+            border-radius: 12px;
+            color: var(--brand-cyan);
+        }
+
+        h2 {
+            font-size: 2rem;
+            font-weight: 700;
+            letter-spacing: -0.02em;
+        }
+
+        p {
+            color: var(--text-secondary);
+            margin-bottom: 1.5rem;
+            font-size: 1.05rem;
+            font-weight: 300;
+        }
+
+        /* Highlight Boxes / Alerts */
+        .info-box {
+            background: rgba(6, 182, 212, 0.08);
+            border-left: 4px solid var(--brand-cyan);
+            border-radius: 12px;
+            padding: 1.5rem;
+            margin: 2rem 0;
+            display: flex;
+            gap: 1rem;
+        }
+
+        .info-box i {
+            color: var(--brand-cyan);
+            flex-shrink: 0;
+            margin-top: 0.25rem;
+        }
+
+        .info-box div h4 {
+            font-weight: 600;
+            margin-bottom: 0.5rem;
+            color: var(--brand-cyan);
+        }
+
+        /* Formulas & Math Blocks */
+        .math-block {
+            background: rgba(11, 15, 25, 0.5);
+            border: 1px solid var(--glass-border);
+            border-radius: 16px;
+            padding: 2rem;
+            margin: 1.5rem 0;
+            text-align: center;
+            font-family: var(--font-primary);
+            position: relative;
+        }
+
+        .math-eq {
+            font-size: 1.35rem;
+            font-weight: 600;
+            color: #ffffff;
+            margin-bottom: 0.5rem;
+            letter-spacing: 0.03em;
+        }
+
+        .math-label {
+            font-size: 0.85rem;
+            color: var(--brand-cyan);
+            text-transform: uppercase;
+            letter-spacing: 0.1em;
+        }
+
+        /* Grid Cards */
+        .feature-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
+            gap: 1.5rem;
+            margin: 2.5rem 0;
+        }
+
+        .feature-card {
+            background: var(--bg-accent);
+            border: 1px solid var(--glass-border);
+            border-radius: 16px;
+            padding: 2rem;
+            transition: var(--transition-smooth);
+        }
+
+        .feature-card:hover {
+            transform: translateY(-5px);
+            border-color: var(--brand-cyan);
+        }
+
+        .feature-card i {
+            font-size: 1.75rem;
+            color: var(--brand-cyan);
+            margin-bottom: 1.25rem;
+        }
+
+        .feature-card h4 {
+            font-size: 1.25rem;
+            font-weight: 600;
+            margin-bottom: 0.75rem;
+        }
+
+        .feature-card p {
+            font-size: 0.95rem;
+            margin-bottom: 0;
+        }
+
+        /* Code Block Containers */
+        .code-container {
+            position: relative;
+            background: #050811;
+            border: 1px solid var(--glass-border);
+            border-radius: 16px;
+            margin: 2rem 0;
+            overflow: hidden;
+        }
+
+        .code-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            background: var(--bg-secondary);
+            padding: 0.75rem 1.5rem;
+            border-bottom: 1px solid var(--glass-border);
+        }
+
+        .code-title {
+            font-size: 0.85rem;
+            font-family: var(--font-mono);
+            color: var(--text-secondary);
+        }
+
+        .copy-btn {
+            background: transparent;
+            border: none;
+            color: var(--text-secondary);
+            cursor: pointer;
+            display: flex;
+            align-items: center;
+            gap: 0.5rem;
+            font-size: 0.8rem;
+            transition: var(--transition-smooth);
+        }
+
+        .copy-btn:hover {
+            color: var(--text-primary);
+        }
+
+        pre {
+            padding: 1.5rem;
+            overflow-x: auto;
+            font-family: var(--font-mono);
+            font-size: 0.9rem;
+            color: #e5e7eb;
+        }
+
+        /* Steps Layout */
+        .steps {
+            position: relative;
+            margin-top: 2rem;
+        }
+
+        .step {
+            position: relative;
+            padding-left: 3rem;
+            margin-bottom: 2rem;
+        }
+
+        .step::before {
+            content: '';
+            position: absolute;
+            left: 12px;
+            top: 28px;
+            bottom: -28px;
+            width: 2px;
+            background: var(--glass-border);
+        }
+
+        .step:last-child::before {
+            display: none;
+        }
+
+        .step-num {
+            position: absolute;
+            left: 0;
+            top: 0;
+            width: 26px;
+            height: 26px;
+            border-radius: 50%;
+            background: var(--brand-cyan);
+            color: var(--bg-primary);
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-weight: 700;
+            font-size: 0.9rem;
+        }
+
+        .step h4 {
+            font-size: 1.15rem;
+            font-weight: 600;
+            margin-bottom: 0.5rem;
+        }
+
+        /* Custom Interactive Stress Demo Canvas Area */
+        .demo-panel {
+            background: var(--bg-secondary);
+            border: 1px solid var(--glass-border);
+            border-radius: 16px;
+            padding: 2.5rem;
+            margin: 2rem 0;
+        }
+
+        .slider-group {
+            display: flex;
+            flex-direction: column;
+            gap: 1rem;
+            margin-bottom: 2rem;
+        }
+
+        .slider-row {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            background: var(--glass-bg);
+            padding: 1rem 1.5rem;
+            border-radius: 12px;
+            border: 1px solid var(--glass-border);
+        }
+
+        .slider-label {
+            font-size: 0.95rem;
+            font-weight: 500;
+        }
+
+        .slider-input {
+            width: 200px;
+            accent-color: var(--brand-cyan);
+        }
+
+        .stress-output-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+            gap: 1.5rem;
+        }
+
+        .stress-box {
+            background: var(--bg-accent);
+            border-radius: 12px;
+            padding: 1.5rem;
+            text-align: center;
+            border: 1px solid var(--glass-border);
+        }
+
+        .stress-val {
+            font-size: 2rem;
+            font-weight: 700;
+            color: var(--brand-cyan);
+            margin: 0.5rem 0;
+            font-family: var(--font-mono);
+        }
+
+        footer {
+            text-align: center;
+            padding: 4rem 2rem;
+            border-top: 1px solid var(--glass-border);
+            max-width: 1200px;
+            margin: 0 auto;
+            color: var(--text-secondary);
+            font-size: 0.9rem;
+        }
+
+        /* Animations */
+        @keyframes pulse-slow {
+            0% { transform: scale(1); opacity: 0.8; }
+            100% { transform: scale(1.05); opacity: 1; }
+        }
+
+        /* Responsive Design */
+        @media (max-width: 1024px) {
+            .doc-layout {
+                grid-template-columns: 1fr;
+            }
+            .sidebar {
+                display: none; /* Hide sticky sidebar on tablet/mobile */
+            }
+            h1 {
+                font-size: 2.75rem;
+            }
+        }
+    </style>
+</head>
+<body>
+
+    <!-- Glow Backdrops -->
+    <div class="glow-blob blob-1"></div>
+    <div class="glow-blob blob-2"></div>
+    <div class="glow-blob blob-3"></div>
+
+    <!-- Header Section -->
+    <header>
+        <div class="logo-container">
+            <i data-lucide="activity" class="logo-icon"></i>
+            <span class="logo-text">AERO-STRUCT ENGINE v1.2</span>
+        </div>
+        <h1 id="title">3D Finite Element Analysis</h1>
+        <p class="subtitle">Complete technical documentation and mathematical foundations for the 3D Beam FEA Engine, stress formulations, and volumetric tube visualizations.</p>
+        
+        <div class="badge-grid">
+            <div class="badge">
+                <i data-lucide="cpu"></i>
+                <span>Numpy & SciPy Solvers</span>
+            </div>
+            <div class="badge">
+                <i data-lucide="shield-check"></i>
+                <span>Von Mises Stress Verification</span>
+            </div>
+            <div class="badge">
+                <i data-lucide="box"></i>
+                <span>Interactive 3D Plotting</span>
+            </div>
+        </div>
+    </header>
+
+    <!-- Main Layout -->
+    <div class="doc-layout">
+        <!-- Sidebar Navigation -->
+        <aside class="sidebar">
+            <h3>Engine Index</h3>
+            <ul class="sidebar-menu">
+                <li class="sidebar-item">
+                    <a href="#intro" class="sidebar-link active">
+                        <i data-lucide="book-open"></i>
+                        <span>Introduction</span>
+                    </a>
+                </li>
+                <li class="sidebar-item">
+                    <a href="#math" class="sidebar-link">
+                        <i data-lucide="variable"></i>
+                        <span>Math & Physics</span>
+                    </a>
+                </li>
+                <li class="sidebar-item">
+                    <a href="#code" class="sidebar-link">
+                        <i data-lucide="code-xml"></i>
+                        <span>Code Architecture</span>
+                    </a>
+                </li>
+                <li class="sidebar-item">
+                    <a href="#calculator" class="sidebar-link">
+                        <i data-lucide="sliders"></i>
+                        <span>Interactive Demo</span>
+                    </a>
+                </li>
+                <li class="sidebar-item">
+                    <a href="#setup" class="sidebar-link">
+                        <i data-lucide="terminal"></i>
+                        <span>Quick Start</span>
+                    </a>
+                </li>
+            </ul>
+        </aside>
+
+        <!-- Main Content Panel -->
+        <main>
+            <!-- Introduction Section -->
+            <section id="intro">
+                <div class="section-header">
+                    <div class="section-icon"><i data-lucide="info"></i></div>
+                    <h2>Introduction</h2>
+                </div>
+                <p>This program implements an advanced, highly modular <strong>3D Finite Element Analysis (FEA) Solver</strong> specifically designed for representing, simulating, and evaluating spatial structural frames using 3D linear beam elements.</p>
+                <p>Equipped with support for elastic material bounds and customized cross-sectional profile calculations (circular hollow tube structure), the engine is capable of computing structural nodal displacements, internal forces, torsional shearing stresses, and yielding metrics under arbitrary point loading forces.</p>
+                
+                <div class="feature-grid">
+                    <div class="feature-card">
+                        <i data-lucide="git-merge"></i>
+                        <h4>6 Degrees of Freedom</h4>
+                        <p>Evaluates translation and rotational displacements simultaneously for every node in local and global spatial axes.</p>
+                    </div>
+                    <div class="feature-card">
+                        <i data-lucide="palette"></i>
+                        <h4>Structural Hotspotting</h4>
+                        <p>Post-processes combined loading stress tensors to calculate Von Mises equivalent stress mapped to 3D tube geometries.</p>
+                    </div>
+                </div>
+            </section>
+
+            <!-- Math and Physics Section -->
+            <section id="math">
+                <div class="section-header">
+                    <div class="section-icon"><i data-lucide="variable"></i></div>
+                    <h2>Mathematical Formulations</h2>
+                </div>
+                <p>The mathematical pipeline utilizes Euler-Bernoulli linear bending mechanics combined with St. Venant torsional formulations. Transverse shear and axial tension stiffness properties are aggregated into a \(12 \times 12\) element stiffness matrix \(K^e_{local}\) in the local coordinate systems.</p>
+                
+                <div class="math-block">
+                    <div class="math-eq">\[f_{local} = K^e_{local} \cdot u_{local}\]</div>
+                    <div class="math-label">Governing Nodal Equilibrium Equation</div>
+                </div>
+
+                <p>To transition elements from arbitrary orientations in 3D space to the global system, direction cosines are used to construct an orthonormal coordinate rotation matrix \(R_{3\times 3}\). The global element stiffness matrix is derived via: </p>
+                
+                <div class="math-block">
+                    <div class="math-eq">\[K^e_{global} = T^T \cdot K^e_{local} \cdot T\]</div>
+                    <div class="math-label">Orthogonal Coordinate Transformation</div>
+                </div>
+                <p>Where \(T\) is the \(12\times 12\) kinematic transformation matrix composed of the direction cosines rotation matrix block-diagonally.</p>
+
+                <h3 style="margin: 2rem 0 1rem; font-weight: 600;">Von Mises Equivalent Stress</h3>
+                <p>During the post-processing phase, the stress state at extreme fibers is calculated by combining axial force \(F_x\), torsion \(M_x\), and bending moments \(M_y\), \(M_z\). The normal stress \(\sigma_x\) and shearing stress \(\tau_{torsion}\) are computed as:</p>
+
+                <div class="math-block">
+                    <div class="math-eq">\[\sigma_x = \frac{F_x}{A} - \frac{M_z \cdot y}{I_z} + \frac{M_y \cdot z}{I_y}\]</div>
+                    <div class="math-label">Combined Axial and Biaxial Bending Normal Stress</div>
+                </div>
+
+                <div class="math-block">
+                    <div class="math-eq">\[\tau_{torsion} = \frac{M_x \cdot r_{outer}}{J}\]</div>
+                    <div class="math-label">Torsional Shearing Stress Formula</div>
+                </div>
+
+                <p>Finally, these are reduced into the uni-axial equivalent **Von Mises Stress** at the critical cross-sectional outer points:</p>
+                <div class="math-block">
+                    <div class="math-eq">\[\sigma_{VM} = \sqrt{\sigma_x^2 + 3 \tau_{torsion}^2}\]</div>
+                    <div class="math-label">Von Mises Equivalent Yield Condition</div>
+                </div>
+            </section>
+
+            <!-- Code Architecture Section -->
+            <section id="code">
+                <div class="section-header">
+                    <div class="section-icon"><i data-lucide="folder-git-2"></i></div>
+                    <h2>Code Architecture</h2>
+                </div>
+                <p>The code is designed to be lean, performant, and self-contained within `main.py`. The structural execution workflow is separated into 5 clear pipelines:</p>
+                
+                <div class="steps">
+                    <div class="step">
+                        <span class="step-num">1</span>
+                        <h4>Pre-Processing & Geometry Setup</h4>
+                        <p>Defining nodes, connectivity arrays, hollow tube radius bounds, and isotropic material variables (Elastic modulus & Poisson ratio).</p>
+                    </div>
+                    <div class="step">
+                        <span class="step-num">2</span>
+                        <h4>Local Element Stiffness Formulations</h4>
+                        <p>The function <code>calculate_element_stiffness_matrix_3d_beam</code> evaluates the structural resistances based on length \(L\), cross-section area \(A\), moments of inertia \(I_y, I_z\), and polar moment of inertia \(J\).</p>
+                    </div>
+                    <div class="step">
+                        <span class="step-num">3</span>
+                        <h4>Assembly of Global System Equations</h4>
+                        <p>Degrees of Freedom (DOFs) are mapped to global indices, and the element matrices are summed into the global stiffness matrix \(K_{global}\) (\(N_{nodes} \times 6\)).</p>
+                    </div>
+                    <div class="step">
+                        <span class="step-num">4</span>
+                        <h4>Boundary Enforcement and Solving</h4>
+                        <p>Fixed supports are applied via penalty or partition boundaries (zeroing rows/columns and setting diagonal elements to 1). The displacement vector \(U\) is solved via <code>scipy.linalg.solve</code>.</p>
+                    </div>
+                    <div class="step">
+                        <span class="step-num">5</span>
+                        <h4>Stress Post-Processing and 3D Volumetric Tube Visualization</h4>
+                        <p>Nodal translations are mapped to elements. Element cylinder vertices are created in 3D, colored based on Von Mises output, and plotted utilizing matplotlib's <code>Poly3DCollection</code>.</p>
+                    </div>
+                </div>
+            </section>
+
+
+            <!-- Interactive Demo Calculator Section -->
+            <section id="calculator">
+                <div class="section-header">
+                    <div class="section-icon"><i data-lucide="sliders"></i></div>
+                    <h2>Interactive Nodal Stress Calculator</h2>
+                </div>
+                <p>Use the simulator sliders below to compute real-time analytical stresses and see how geometry changes impact Von Mises equivalent yielding stress thresholds for a hollow steel beam under point loads.</p>
+                
+                <div class="demo-panel">
+                    <div style="margin-bottom: 1.5rem; display: flex; align-items: center; gap: 1rem;">
+                        <span style="font-weight: 500; font-size: 0.95rem;">Unit System:</span>
+                        <select id="doc-unit-system" style="background: var(--bg-accent); color: var(--text-primary); border: 1px solid var(--glass-border); padding: 0.5rem 1rem; border-radius: 8px; font-family: var(--font-primary); font-size: 0.9rem; cursor: pointer; outline: none; transition: var(--transition-smooth);">
+                            <option value="Metric">Metric (N, mm, tonne)</option>
+                            <option value="Imperial">Imperial (lbf, in, lbm)</option>
+                        </select>
+                    </div>
+                    
+                    <div class="slider-group">
+                        <div class="slider-row">
+                            <span class="slider-label">Bending Moment ($M_z$) - <span id="m-val" style="color: var(--brand-cyan); font-weight:bold;">1000000</span> <span id="m-unit" style="color: var(--brand-cyan); font-weight:bold;">N-mm</span></span>
+                            <input type="range" min="100000" max="5000000" step="50000" value="1000000" id="m-slider" class="slider-input">
+                        </div>
+                        <div class="slider-row">
+                            <span class="slider-label">Outer Radius ($r_{out}$) - <span id="rout-val" style="color: var(--brand-cyan); font-weight:bold;">100.0</span> <span id="rout-unit" style="color: var(--brand-cyan); font-weight:bold;">mm</span></span>
+                            <input type="range" min="10" max="300" step="1" value="100" id="rout-slider" class="slider-input">
+                        </div>
+                        <div class="slider-row">
+                            <span class="slider-label">Inner Radius ($r_{in}$) - <span id="rin-val" style="color: var(--brand-cyan); font-weight:bold;">80.0</span> <span id="rin-unit" style="color: var(--brand-cyan); font-weight:bold;">mm</span></span>
+                            <input type="range" min="5" max="290" step="1" value="80" id="rin-slider" class="slider-input">
+                        </div>
+                    </div>
+
+                    <div class="stress-output-grid">
+                        <div class="stress-box">
+                            <h4>Moment of Inertia ($I_z$)</h4>
+                            <div class="stress-val" id="iz-display">4.64e+7</div>
+                            <span style="font-size:0.8rem; color: var(--text-secondary)" id="iz-unit">mm⁴</span>
+                        </div>
+                        <div class="stress-box">
+                            <h4>Bending Normal Stress</h4>
+                            <div class="stress-val" id="sigma-display">2.16</div>
+                            <span style="font-size:0.8rem; color: var(--text-secondary)" id="sigma-unit">MPa</span>
+                        </div>
+                        <div class="stress-box" style="border-color: var(--brand-cyan)">
+                            <h4>Von Mises Stress</h4>
+                            <div class="stress-val" style="color: var(--brand-cyan)" id="vm-display">2.16</div>
+                            <span style="font-size:0.8rem; color: var(--text-secondary)" id="vm-unit">MPa</span>
+                        </div>
+                    </div>
+                </div>
+            </section>
+
+            <!-- Quick Start / Running Code Section -->
+            <section id="setup">
+                <div class="section-header">
+                    <div class="section-icon"><i data-lucide="terminal"></i></div>
+                    <h2>Quick Start</h2>
+                </div>
+                <p>To run the structural FEA solver locally, make sure you have the required engineering libraries installed, then execute the main pipeline script.</p>
+                
+                <div class="code-container">
+                    <div class="code-header">
+                        <span class="code-title">Terminal</span>
+                        <button class="copy-btn" id="copy-install-btn"><i data-lucide="copy" style="width:14px;"></i>Copy</button>
+                    </div>
+                    <pre><code id="install-code">pip install numpy scipy matplotlib</code></pre>
+                </div>
+
+                <div class="code-container">
+                    <div class="code-header">
+                        <span class="code-title">Command Line</span>
+                        <button class="copy-btn" id="copy-run-btn"><i data-lucide="copy" style="width:14px;"></i>Copy</button>
+                    </div>
+                    <pre><code id="run-code">python main.py</code></pre>
+                </div>
+
+                <div class="info-box">
+                    <i data-lucide="help-circle"></i>
+                    <div>
+                        <h4>Viewing Plot Results</h4>
+                        <p style="margin: 0;">Once run, the solver outputs calculated nodal coordinates, stresses, and outputs the graphic plot <code>fea_plot.png</code> in the current project directory showing your structurally color-coded 3D tube stress distribution.</p>
+                    </div>
+                </div>
+            </section>
+        </main>
+    </div>
+
+    <!-- Footer -->
+    <footer>
+        <p>&copy; 2026 Aero-Struct Finite Element Solvers. Developed by the engineering team.</p>
+    </footer>
+
+    <!-- Interactive JS logic -->
+    <script>
+        // Initialize Lucide Icons
+        lucide.createIcons();
+
+        // Interactive calculator calculations
+        const mSlider = document.getElementById('m-slider');
+        const routSlider = document.getElementById('rout-slider');
+        const rinSlider = document.getElementById('rin-slider');
+
+        const mVal = document.getElementById('m-val');
+        const routVal = document.getElementById('rout-val');
+        const rinVal = document.getElementById('rin-val');
+
+        const izDisplay = document.getElementById('iz-display');
+        const sigmaDisplay = document.getElementById('sigma-display');
+        const vmDisplay = document.getElementById('vm-display');
+
+        const unitDropdown = document.getElementById('doc-unit-system');
+        const mUnit = document.getElementById('m-unit');
+        const routUnit = document.getElementById('rout-unit');
+        const rinUnit = document.getElementById('rin-unit');
+        const izUnit = document.getElementById('iz-unit');
+        const sigmaUnit = document.getElementById('sigma-unit');
+        const vmUnit = document.getElementById('vm-unit');
+
+        unitDropdown.addEventListener('change', () => {
+            const isMetric = unitDropdown.value === 'Metric';
+            mUnit.innerText = isMetric ? 'N-mm' : 'lbf-in';
+            routUnit.innerText = isMetric ? 'mm' : 'in';
+            rinUnit.innerText = isMetric ? 'mm' : 'in';
+            izUnit.innerText = isMetric ? 'mm⁴' : 'in⁴';
+            sigmaUnit.innerText = isMetric ? 'MPa' : 'psi';
+            vmUnit.innerText = isMetric ? 'MPa' : 'psi';
+
+            if (isMetric) {
+                // Imperial -> Metric conversion
+                mSlider.min = 100000; mSlider.max = 5000000; mSlider.step = 50000;
+                mSlider.value = Math.round(parseFloat(mSlider.value) * 112.9848);
+                
+                routSlider.min = 10; routSlider.max = 300; routSlider.step = 1;
+                routSlider.value = Math.round(parseFloat(routSlider.value) * 25.4);
+                
+                rinSlider.min = 5; rinSlider.max = 290; rinSlider.step = 1;
+                rinSlider.value = Math.round(parseFloat(rinSlider.value) * 25.4);
+            } else {
+                // Metric -> Imperial conversion
+                mSlider.min = 885; mSlider.max = 44253; mSlider.step = 500;
+                mSlider.value = Math.round(parseFloat(mSlider.value) * 0.00885075);
+                
+                routSlider.min = 0.4; routSlider.max = 12.0; routSlider.step = 0.1;
+                routSlider.value = (parseFloat(routSlider.value) / 25.4).toFixed(1);
+                
+                rinSlider.min = 0.2; rinSlider.max = 11.5; rinSlider.step = 0.1;
+                rinSlider.value = (parseFloat(rinSlider.value) / 25.4).toFixed(1);
+            }
+            recalculate();
+        });
+
+        function recalculate() {
+            const isMetric = unitDropdown.value === 'Metric';
+            let M = parseFloat(mSlider.value);
+            let ro = parseFloat(routSlider.value);
+            let ri = parseFloat(rinSlider.value);
+
+            // Constraint: Inner radius must be smaller than outer radius
+            let limit = isMetric ? 1.0 : 0.05;
+            if (ri >= ro) {
+                ri = ro - limit;
+                rinSlider.value = ri;
+            }
+
+            // Update label readouts
+            mVal.innerText = M;
+            routVal.innerText = isMetric ? ro.toFixed(1) : ro.toFixed(2);
+            rinVal.innerText = isMetric ? ri.toFixed(1) : ri.toFixed(2);
+
+            // Compute Moment of Inertia Iz
+            let Iz = (Math.PI / 4) * (Math.pow(ro, 4) - Math.pow(ri, 4));
+            izDisplay.innerText = Iz.toExponential(2);
+
+            // Compute bending normal stress (MPa or psi) at outer fiber directly
+            let sigma = (M * ro) / Iz;
+            sigmaDisplay.innerText = sigma.toFixed(2);
+
+            // Since there's no torsion in this interactive demo, Von Mises is equal to normal stress
+            vmDisplay.innerText = sigma.toFixed(2);
+        }
+
+        [mSlider, routSlider, rinSlider].forEach(slider => {
+            slider.addEventListener('input', recalculate);
+        });
+
+        // Copy command helpers
+        document.getElementById('copy-install-btn').addEventListener('click', () => {
+            navigator.clipboard.writeText(document.getElementById('install-code').innerText);
+            alert('Copied pip install command!');
+        });
+        document.getElementById('copy-run-btn').addEventListener('click', () => {
+            navigator.clipboard.writeText(document.getElementById('run-code').innerText);
+            alert('Copied python execute command!');
+        });
+    </script>
+</body>
+</html>

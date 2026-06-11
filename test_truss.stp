@@ -1,0 +1,49 @@
+ISO-10303-21;
+HEADER;
+FILE_DESCRIPTION(('Aero-Struct Test Truss'),'2;1');
+FILE_NAME('test_truss.stp','2026-06-01T01:16:00',('Aero-Struct Team'),('Engineering'),'Processor','Editor','');
+FILE_SCHEMA(('CONFIG_CONTROL_DESIGN'));
+ENDSEC;
+DATA;
+#10 = CARTESIAN_POINT('Node 0', (0.0, 0.0, 0.0));
+#20 = CARTESIAN_POINT('Node 1', (1.0, 0.0, 0.0));
+#30 = CARTESIAN_POINT('Node 2', (0.5, 0.866, 0.0));
+#40 = CARTESIAN_POINT('Node 3', (0.5, 0.288, 0.816));
+
+#11 = VERTEX_POINT('', #10);
+#21 = VERTEX_POINT('', #20);
+#31 = VERTEX_POINT('', #30);
+#41 = VERTEX_POINT('', #40);
+
+#101 = LINE('', #10, #102);
+#102 = VECTOR('', #103, 1.0);
+#103 = DIRECTION('', (1.0, 0.0, 0.0));
+
+#201 = LINE('', #20, #202);
+#202 = VECTOR('', #203, 1.0);
+#203 = DIRECTION('', (-0.5, 0.866, 0.0));
+
+#301 = LINE('', #30, #302);
+#302 = VECTOR('', #303, 1.0);
+#303 = DIRECTION('', (-0.5, -0.866, 0.0));
+
+#401 = LINE('', #10, #402);
+#402 = VECTOR('', #403, 1.0);
+#403 = DIRECTION('', (0.5, 0.288, 0.816));
+
+#501 = LINE('', #20, #502);
+#502 = VECTOR('', #503, 1.0);
+#503 = DIRECTION('', (-0.5, 0.288, 0.816));
+
+#601 = LINE('', #30, #602);
+#602 = VECTOR('', #603, 1.0);
+#603 = DIRECTION('', (0.0, -0.578, 0.816));
+
+#15 = EDGE_CURVE('Edge 0-1', #11, #21, #101, .T.);
+#25 = EDGE_CURVE('Edge 1-2', #21, #31, #201, .T.);
+#35 = EDGE_CURVE('Edge 2-0', #31, #11, #301, .T.);
+#45 = EDGE_CURVE('Edge 0-3', #11, #41, #401, .T.);
+#55 = EDGE_CURVE('Edge 1-3', #21, #41, #501, .T.);
+#65 = EDGE_CURVE('Edge 2-3', #31, #41, #601, .T.);
+ENDSEC;
+END-ISO-10303-21;
