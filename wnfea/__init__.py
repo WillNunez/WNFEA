@@ -1,0 +1,40 @@
+# WNFEA — 3D Beam Finite Element Analysis Package
+#
+# Top-level convenience imports so that users can write:
+#
+#   from wnfea import FEAModel, STEPParser, BeamMesher, BeamSolver, PostProcessor
+
+from .model import FEAModel, PipelineStage, PropertyAssignment
+from .geometry.step_parser import STEPParser, STEPParseError
+from .geometry.primitives import Point3D, GeometryNode, GeometryEdge, GeometryFace
+from .properties.materials import MaterialDef, get_preset_material, create_custom_material, MATERIAL_PRESETS
+from .properties.sections import SectionDef, create_hollow_tube, create_solid_circle
+from .boundary.conditions import (
+    SupportDef, LoadDef, DOFConstraint, DOFType,
+    create_fixed_support,
+)
+from .mesh.beam_mesher import BeamMesher, MeshError
+from .solver.beam_solver import BeamSolver, SolverError
+from .results.post_processor import PostProcessor, PostProcessError
+from .results.result_data import StressPoint, ElementResult, ModelResults
+
+__all__ = [
+    # Model
+    "FEAModel", "PipelineStage", "PropertyAssignment",
+    # Geometry
+    "STEPParser", "STEPParseError",
+    "Point3D", "GeometryNode", "GeometryEdge", "GeometryFace",
+    # Properties
+    "MaterialDef", "get_preset_material", "create_custom_material", "MATERIAL_PRESETS",
+    "SectionDef", "create_hollow_tube", "create_solid_circle",
+    # Boundary
+    "SupportDef", "LoadDef", "DOFConstraint", "DOFType",
+    "create_fixed_support",
+    # Mesh
+    "BeamMesher", "MeshError",
+    # Solver
+    "BeamSolver", "SolverError",
+    # Results
+    "PostProcessor", "PostProcessError",
+    "StressPoint", "ElementResult", "ModelResults",
+]
