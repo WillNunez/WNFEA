@@ -8,7 +8,11 @@ from .model import FEAModel, PipelineStage, PropertyAssignment
 from .geometry.step_parser import STEPParser, STEPParseError
 from .geometry.primitives import Point3D, GeometryNode, GeometryEdge, GeometryFace
 from .properties.materials import MaterialDef, get_preset_material, create_custom_material, MATERIAL_PRESETS
-from .properties.sections import SectionDef, create_hollow_tube, create_solid_circle
+from .properties.sections import (
+    SectionDef, create_hollow_tube, create_solid_circle,
+    create_square_tube, create_rectangular_tube, create_i_beam,
+    create_rectangular_bar, create_general_section,
+)
 from .boundary.conditions import (
     SupportDef, LoadDef, DOFConstraint, DOFType,
     create_fixed_support,
@@ -27,6 +31,8 @@ __all__ = [
     # Properties
     "MaterialDef", "get_preset_material", "create_custom_material", "MATERIAL_PRESETS",
     "SectionDef", "create_hollow_tube", "create_solid_circle",
+    "create_square_tube", "create_rectangular_tube", "create_i_beam",
+    "create_rectangular_bar", "create_general_section",
     # Boundary
     "SupportDef", "LoadDef", "DOFConstraint", "DOFType",
     "create_fixed_support",

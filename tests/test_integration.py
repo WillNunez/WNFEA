@@ -7,7 +7,7 @@ from wnfea.model import FEAModel, PropertyAssignment
 from wnfea.properties.materials import get_preset_material
 from wnfea.properties.sections import create_hollow_tube
 from wnfea.boundary.conditions import create_fixed_support, LoadDef
-from wnfea.mesh.beam_mesher import mesh_model
+from wnfea.mesh.beam_mesher import BeamMesher
 from wnfea.solver.linear_static import solve_linear_static
 from wnfea.solver.stress import compute_element_stresses
 from wnfea.results.result_set import ResultSet
@@ -44,7 +44,8 @@ print("    PASS")
 
 # Stage 3: Mesh
 print("\n[3] Meshing (2 elements per edge)...")
-mesh_model(model, elements_per_edge=2)
+mesher = BeamMesher(n_divisions=2)
+mesher.mesh(model)
 print(f"    Mesh nodes: {len(model.mesh_nodes)}")
 print(f"    Mesh elements: {len(model.mesh_elements)}")
 print(f"    Geometry-to-mesh map: {model.geometry_to_mesh_node_map}")

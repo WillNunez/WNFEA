@@ -1,4 +1,6 @@
 import sys
+import os
+import re
 import numpy as np
 import pandas as pd
 from scipy.linalg import solve
@@ -7,6 +9,7 @@ matplotlib.use('QtAgg')
 import matplotlib.pyplot as plt
 from mpl_toolkits.mplot3d.art3d import Poly3DCollection
 from matplotlib.backends.backend_qtagg import FigureCanvasQTAgg as FigureCanvas
+from matplotlib.backends.backend_qtagg import NavigationToolbar2QT as NavigationToolbar
 
 from PySide6.QtWidgets import (
     QApplication, QMainWindow, QWidget, QVBoxLayout, QHBoxLayout, 
@@ -18,7 +21,17 @@ from PySide6.QtCore import Qt, Signal, QUrl
 from PySide6.QtWebEngineWidgets import QWebEngineView
 from PySide6.QtWebEngineCore import QWebEngineSettings
 from PySide6.QtGui import QFont, QColor, QPalette
-import re
+
+# WNFEA Core Imports
+from wnfea.model import FEAModel, PropertyAssignment
+from wnfea.geometry.primitives import Point3D, GeometryNode, GeometryEdge
+from wnfea.geometry.step_parser import STEPParser
+from wnfea.properties.materials import MaterialDef
+from wnfea.properties.sections import SectionDef
+from wnfea.mesh.beam_mesher import BeamMesher
+from wnfea.solver.linear_static import solve_linear_static
+from wnfea.solver.stress import compute_element_stresses
+from wnfea.results.result_set import ResultSet
 
 # --- Conversion Constants ---
 MM_TO_IN = 1.0 / 25.4
@@ -283,6 +296,9 @@ class FEAEngineApp(QMainWindow):
         self.total_deflection = 0.0
         self.safety_factor = 0.0
         
+        # Central FEA Model
+        self.model = FEAModel()
+        
         # Generalized Cross-Section Properties (in mm, mm^2, mm^4)
         self.A = 11300.0
         self.Iy = 4.64e7
@@ -352,22 +368,46 @@ class FEAEngineApp(QMainWindow):
         
         self.splitter.addWidget(self.sidebar)
         
-        # --- Main Content (Stacked Widget) ---
+        # --- Middle Splitter (Controls + Viewport) ---
+        self.middle_splitter = QSplitter(Qt.Horizontal)
+        
+        # Stacked widget (for inputs and controls only)
         self.stacked_widget = QStackedWidget()
-        self.splitter.addWidget(self.stacked_widget)
+        self.middle_splitter.addWidget(self.stacked_widget)
+        
+        # 3D Viewport Panel (Persistent on the right)
+        self.viewport_container = QGroupBox("3D Viewport")
+        viewport_layout = QVBoxLayout(self.viewport_container)
+        viewport_layout.setContentsMargins(10, 10, 10, 10)
+        
+        self.geom_canvas = MatplotlibCanvas(self)
+        self.canvas = self.geom_canvas
+        self.geom_toolbar = NavigationToolbar(self.geom_canvas, self)
+        self.geom_toolbar.setStyleSheet("background-color: #1e2942; color: #ffffff; border: none;")
+        
+        viewport_layout.addWidget(self.geom_toolbar)
+        viewport_layout.addWidget(self.geom_canvas)
+        
+        self.middle_splitter.addWidget(self.viewport_container)
+        self.middle_splitter.setStretchFactor(0, 4)
+        self.middle_splitter.setStretchFactor(1, 6)
+        
+        self.splitter.addWidget(self.middle_splitter)
         
         # --- Right Documentation Panel ---
         self.doc_view = QWebEngineView()
         doc_settings = self.doc_view.settings()
         doc_settings.setAttribute(QWebEngineSettings.WebAttribute.LocalContentCanAccessRemoteUrls, True)
         doc_settings.setAttribute(QWebEngineSettings.WebAttribute.LocalContentCanAccessFileUrls, True)
-        self.doc_view.setUrl(QUrl("file:///h:/Other%20computers/My%20Computer/Coding_Scratch/index.html"))
+        base_dir = os.path.dirname(os.path.abspath(__file__))
+        doc_path = os.path.join(base_dir, "index.html")
+        self.doc_view.setUrl(QUrl.fromLocalFile(doc_path))
         self.splitter.addWidget(self.doc_view)
         
         # Set layout proportions
         self.splitter.setStretchFactor(0, 0)
-        self.splitter.setStretchFactor(1, 6)
-        self.splitter.setStretchFactor(2, 4)
+        self.splitter.setStretchFactor(1, 7)
+        self.splitter.setStretchFactor(2, 3)
         
         self.splitter.setCollapsible(0, False)
         self.splitter.setCollapsible(1, False)
@@ -380,7 +420,7 @@ class FEAEngineApp(QMainWindow):
         self.create_results_page()
         
         # Draw initial geometry preview
-        self.update_geometry_preview()
+        self.update_visualization()
         
         # Select first page
         self.switch_page(0)
@@ -389,6 +429,9 @@ class FEAEngineApp(QMainWindow):
         self.stacked_widget.setCurrentIndex(index)
         for i, btn in enumerate(self.nav_buttons):
             btn.setChecked(i == index)
+        if index == 2:
+            self.refresh_setup_nodes()
+        self.update_visualization()
 
     def toggle_doc_panel(self):
         visible = self.btn_toggle_doc.isChecked()
@@ -397,17 +440,12 @@ class FEAEngineApp(QMainWindow):
     # --- Pages ---
     def create_geometry_page(self):
         page = QWidget()
-        layout = QHBoxLayout(page)
+        layout = QVBoxLayout(page)
         layout.setContentsMargins(20, 20, 20, 20)
-        
-        # Left Panel - Controls
-        left_widget = QWidget()
-        left_layout = QVBoxLayout(left_widget)
-        left_layout.setContentsMargins(0, 0, 0, 0)
         
         header = QLabel("📐 Geometry Setup")
         header.setStyleSheet("font-size: 24px; font-weight: bold; color: #ffffff;")
-        left_layout.addWidget(header)
+        layout.addWidget(header)
         
         # 1. Section Properties Group (Dropdown + Dynamic stacked inputs in mm)
         self.sec_grp = QGroupBox("Beam Section Properties")
@@ -624,7 +662,7 @@ class FEAEngineApp(QMainWindow):
         self.lbl_sec_j.setStyleSheet("color: #06b6d4; font-weight: bold; font-size: 11px;")
         sec_layout.addWidget(self.lbl_sec_j)
         
-        left_layout.addWidget(self.sec_grp)
+        layout.addWidget(self.sec_grp)
         
         # 2. Option A: Parameterized Straight Beam
         self.param_grp = QGroupBox("Option A: Parameterized Straight Beam")
@@ -636,9 +674,9 @@ class FEAEngineApp(QMainWindow):
         self.sp_length.setRange(100.0, 50000.0)
         self.sp_length.setSingleStep(100.0)
         self.sp_length.setValue(2000.0)
-        self.sp_length.valueChanged.connect(self.update_geometry_preview)
+        self.sp_length.valueChanged.connect(self.update_visualization)
         g_layout.addWidget(self.sp_length, 0, 1)
-        left_layout.addWidget(self.param_grp)
+        layout.addWidget(self.param_grp)
         
         # 3. Option B: STEP File Import
         self.step_grp = QGroupBox("Option B: Import STEP Wireframe")
@@ -660,25 +698,15 @@ class FEAEngineApp(QMainWindow):
         self.btn_clear_step.setVisible(False)
         step_layout.addWidget(self.btn_clear_step)
         
-        left_layout.addWidget(self.step_grp)
-        left_layout.addStretch()
-        
-        layout.addWidget(left_widget, 4)
-        
-        # Right Panel - 3D Geometry Preview
-        preview_grp = QGroupBox("3D Geometry Preview")
-        preview_layout = QVBoxLayout(preview_grp)
-        self.geom_canvas = MatplotlibCanvas(self)
-        preview_layout.addWidget(self.geom_canvas)
-        
-        layout.addWidget(preview_grp, 6)
+        layout.addWidget(self.step_grp)
+        layout.addStretch()
         
         self.stacked_widget.addWidget(page)
         
         # Setup shape connections
         self.combo_shape.currentIndexChanged.connect(self.shape_inputs_stacked.setCurrentIndex)
         self.combo_shape.currentIndexChanged.connect(self.update_section_calculation)
-        self.combo_shape.currentIndexChanged.connect(self.update_geometry_preview)
+        self.combo_shape.currentIndexChanged.connect(self.update_visualization)
         
         # Link all sub-widgets valueChanged signals to update calculations
         for spin in [
@@ -687,7 +715,7 @@ class FEAEngineApp(QMainWindow):
             self.gen_a, self.gen_iy, self.gen_iz, self.gen_j, self.gen_ymax, self.gen_zmax
         ]:
             spin.valueChanged.connect(self.update_section_calculation)
-            spin.valueChanged.connect(self.update_geometry_preview)
+            spin.valueChanged.connect(self.update_visualization)
 
     def import_step_file(self):
         file_path, _ = QFileDialog.getOpenFileName(
@@ -696,9 +724,11 @@ class FEAEngineApp(QMainWindow):
         if not file_path:
             return
             
-        edges = parse_step_file(file_path)
-        if not edges:
-            self.lbl_step_status.setText("❌ Failed to parse any curves/lines from STEP file.")
+        parser = STEPParser()
+        try:
+            result = parser.parse(file_path)
+        except Exception as e:
+            self.lbl_step_status.setText(f"❌ Failed to parse STEP file: {e}")
             return
             
         # Scan header content to auto-detect CAD model unit scale
@@ -720,7 +750,6 @@ class FEAEngineApp(QMainWindow):
         scale = 1.0
         is_metric = (self.unit_system == "Metric")
         if is_metric:
-            # Target is mm
             if cad_unit == "m":
                 scale = 1000.0
             elif cad_unit == "cm":
@@ -728,7 +757,6 @@ class FEAEngineApp(QMainWindow):
             elif cad_unit == "in":
                 scale = 25.4
         else:
-            # Target is in
             if cad_unit == "m":
                 scale = 1000.0 / 25.4
             elif cad_unit == "cm":
@@ -736,32 +764,35 @@ class FEAEngineApp(QMainWindow):
             elif cad_unit == "mm":
                 scale = 1.0 / 25.4
                 
-        nodes, elements = consolidate_edges(edges)
-        nodes *= scale # Auto-scale to active system coordinates!
-        
-        self.step_edges = edges
-        self.imported_nodes = nodes
-        self.imported_elements = elements
+        # Scale the coordinates of the nodes
+        for node in result['nodes'].values():
+            node.point.x *= scale
+            node.point.y *= scale
+            node.point.z *= scale
+            
+        self.model.load_geometry(result)
         
         self.lbl_step_status.setText(
             f"✅ Loaded: {file_path.split('/')[-1]}\n"
             f"• CAD Unit: {cad_unit.upper()} (Auto-Scaled to {self.unit_system})\n"
-            f"• Coords: {len(nodes)} unique vertices\n"
-            f"• Edges: {len(elements)} parsed segments"
+            f"• Coords: {len(self.model.geometry_nodes)} unique vertices\n"
+            f"• Edges: {len(self.model.geometry_edges)} parsed segments"
         )
         
         self.btn_clear_step.setVisible(True)
         self.param_grp.setEnabled(False)  # Disable parameterized inputs
-        self.update_geometry_preview()
+        self.update_visualization()
         
     def clear_step_import(self):
-        self.step_edges = None
-        self.imported_nodes = None
-        self.imported_elements = None
+        self.model.geometry_nodes.clear()
+        self.model.geometry_edges.clear()
+        self.model.geometry_faces.clear()
+        self.model.source_file = ""
         self.lbl_step_status.setText("No STEP file loaded. Using Parameterized Beam.")
         self.btn_clear_step.setVisible(False)
         self.param_grp.setEnabled(True)
-        self.update_geometry_preview()
+        self.create_parametric_geometry()
+        self.update_visualization()
 
     def recalculate_section_properties(self):
         shape = self.combo_shape.currentText()
@@ -898,92 +929,390 @@ class FEAEngineApp(QMainWindow):
         self.lbl_sec_iz.setText(f"Iz: {self.Iz:.2e} {u_len4}")
         self.lbl_sec_j.setText(f"Polar J: {self.J:.2e} {u_len4}")
 
-    def update_geometry_preview(self):
-        self.geom_canvas.ax.clear()
+    def create_parametric_geometry(self):
+        L = self.sp_length.value()
+        n0 = GeometryNode(id=0, label="Node 0", point=Point3D(0.0, 0.0, 0.0))
+        n1 = GeometryNode(id=1, label="Node 1", point=Point3D(L, 0.0, 0.0))
+        e0 = GeometryEdge(id=0, label="Edge 0", start_node_id=0, end_node_id=1)
         
-        # Enforce fresh calculations to obtain latest ro and ri
+        geom_data = {
+            'nodes': {0: n0, 1: n1},
+            'edges': {0: e0},
+            'faces': {},
+            'source_file': 'Parametric Beam'
+        }
+        self.model.load_geometry(geom_data)
+
+    def get_preview_mesh(self):
+        if self.model.source_file == 'Parametric Beam' or not self.model.geometry_nodes:
+            self.create_parametric_geometry()
+            
+        mat_name = self.combo_mat.currentText()
         self.recalculate_section_properties()
-        ro = max(self.y_max, self.z_max)
-        shape = self.combo_shape.currentText()
-        ri = ro * 0.8 if "Tube" in shape or "Beam" in shape else 0.0
-        res = 12
         
-        # Build segment pairs
-        segments = []
-        if self.step_edges is not None and len(self.imported_nodes) > 0:
-            nodes = self.imported_nodes
-            for idx, (n1, n2) in enumerate(self.imported_elements):
-                segments.append((nodes[n1], nodes[n2]))
-        else:
-            L = self.sp_length.value()
-            segments.append((np.array([0.0, 0.0, 0.0]), np.array([L, 0.0, 0.0])))
-            
-        # Draw 3D Volumetric Tubes/Cylinders
-        for pt1, pt2 in segments:
-            vec = pt2 - pt1
-            mag = np.linalg.norm(vec)
-            if mag < 1e-9: continue
-            vn = vec / mag
-            
-            # Find orthogonal basis
-            v1 = np.array([1, 0, 0]) if np.isclose(np.abs(vn[2]), 1) else np.array([0, 0, 1])
-            v1 = v1 - np.dot(v1, vn)*vn
-            v1 /= np.linalg.norm(v1)
-            v2 = np.cross(vn, v1)
-            
-            th = np.linspace(0, 2*np.pi, res)
-            cout = ro * (np.outer(np.cos(th), v1) + np.outer(np.sin(th), v2))
-            
-            v_out = []
-            for j in range(res - 1):
-                v_out.append([pt1+cout[j], pt1+cout[j+1], pt2+cout[j+1], pt2+cout[j]])
-            v_out.append([pt1+cout[res-1], pt1+cout[0], pt2+cout[0], pt2+cout[res-1]])
-            
-            self.geom_canvas.ax.add_collection3d(
-                Poly3DCollection(v_out, facecolor='#06b6d4', edgecolor='k', lw=0.15, alpha=0.8)
+        mat = MaterialDef(
+            name=mat_name,
+            youngs_modulus=self.sp_E.value(),
+            poissons_ratio=self.sp_nu.value(),
+            yield_strength=self.sp_yield.value()
+        )
+        self.model.materials[mat.name] = mat
+        
+        shape = self.combo_shape.currentText()
+        section = SectionDef(
+            name=shape,
+            area=self.A,
+            iy=self.Iy,
+            iz=self.Iz,
+            j=self.J,
+            outer_radius=max(self.y_max, self.z_max),
+            inner_radius=self.y_max * 0.8 if "Tube" in shape or "Beam" in shape else 0.0
+        )
+        self.model.sections[section.name] = section
+        
+        for eid in self.model.geometry_edges:
+            self.model.edge_assignments[eid] = PropertyAssignment(
+                material_name=mat.name,
+                section_name=section.name
             )
             
-            if ri > 0:
-                cin = ri * (np.outer(np.cos(th), v1) + np.outer(np.sin(th), v2))
-                v_in = []
-                for j in range(res - 1):
-                    v_in.append([pt1+cin[j], pt1+cin[j+1], pt2+cin[j+1], pt2+cin[j]])
-                v_in.append([pt1+cin[res-1], pt1+cin[0], pt2+cin[0], pt2+cin[res-1]])
-                self.geom_canvas.ax.add_collection3d(
-                    Poly3DCollection(v_in, facecolor='gray', edgecolor='k', lw=0.1, alpha=0.3)
-                )
-                
-        # Draw node markers at the joints
-        all_pts = []
-        if self.step_edges is not None and len(self.imported_nodes) > 0:
-            all_pts = self.imported_nodes
-        else:
-            all_pts = np.array([[0.0, 0.0, 0.0], [self.sp_length.value(), 0.0, 0.0]])
-        self.geom_canvas.ax.scatter(all_pts[:,0], all_pts[:,1], all_pts[:,2], color='white', s=50)
+        mesher = BeamMesher(n_divisions=self.sp_elements.value())
+        try:
+            mesher.mesh(self.model)
+        except Exception as e:
+            print(f"Error in meshing: {e}")
+
+    def parse_node_ids(self, text):
+        text = text.strip().lower()
+        if not text:
+            return []
+            
+        if self.model.source_file == 'Parametric Beam' or not self.model.geometry_nodes:
+            self.create_parametric_geometry()
+            
+        valid_ids = list(self.model.geometry_nodes.keys())
         
-        # Setup bounds
-        if self.step_edges is not None and len(self.imported_nodes) > 0:
-            nodes = self.imported_nodes
-            min_bounds = nodes.min(axis=0)
-            max_bounds = nodes.max(axis=0)
-            centers = (min_bounds + max_bounds) / 2.0
-            ranges = (max_bounds - min_bounds) / 2.0
-            max_range = max(ranges.max(), 0.5)
+        if text == "all":
+            return valid_ids
             
-            self.geom_canvas.ax.set_xlim(centers[0] - max_range, centers[0] + max_range)
-            self.geom_canvas.ax.set_ylim(centers[1] - max_range, centers[1] + max_range)
-            self.geom_canvas.ax.set_zlim(centers[2] - max_range, centers[2] + max_range)
-        else:
-            L = self.sp_length.value()
-            self.geom_canvas.ax.set_xlim(L/2 - L*0.6, L/2 + L*0.6)
-            self.geom_canvas.ax.set_ylim(-L*0.6, L*0.6)
-            self.geom_canvas.ax.set_zlim(-L*0.6, L*0.6)
+        nodes = []
+        parts = text.split(',')
+        for part in parts:
+            part = part.strip()
+            if '-' in part:
+                subparts = part.split('-')
+                if len(subparts) == 2:
+                    try:
+                        start = int(subparts[0].strip())
+                        end = int(subparts[1].strip())
+                        for idx in range(start, end + 1):
+                            if idx in valid_ids:
+                                nodes.append(idx)
+                    except ValueError:
+                        pass
+            else:
+                try:
+                    idx = int(part)
+                    if idx in valid_ids:
+                        nodes.append(idx)
+                except ValueError:
+                    pass
+        return sorted(list(set(nodes)))
+
+    def get_current_boundary_conditions(self):
+        supports = []
+        loads = []
+        
+        from wnfea.boundary.conditions import SupportDef, LoadDef, DOFConstraint, DOFType
+        
+        # 1. Parse supports
+        for r in range(self.table_supports.rowCount()):
+            node_id_item = self.table_supports.item(r, 0)
+            if node_id_item is None:
+                continue
+            node_ids = self.parse_node_ids(node_id_item.text())
             
+            ux_val = DOFType.FIXED if self.table_supports.item(r, 1).checkState() == Qt.Checked else DOFType.FREE
+            uy_val = DOFType.FIXED if self.table_supports.item(r, 2).checkState() == Qt.Checked else DOFType.FREE
+            uz_val = DOFType.FIXED if self.table_supports.item(r, 3).checkState() == Qt.Checked else DOFType.FREE
+            rx_val = DOFType.FIXED if self.table_supports.item(r, 4).checkState() == Qt.Checked else DOFType.FREE
+            ry_val = DOFType.FIXED if self.table_supports.item(r, 5).checkState() == Qt.Checked else DOFType.FREE
+            rz_val = DOFType.FIXED if self.table_supports.item(r, 6).checkState() == Qt.Checked else DOFType.FREE
+            
+            for nid in node_ids:
+                sup = SupportDef(
+                    node_id=nid,
+                    is_geometry_node=True,
+                    ux=DOFConstraint(ux_val),
+                    uy=DOFConstraint(uy_val),
+                    uz=DOFConstraint(uz_val),
+                    rx=DOFConstraint(rx_val),
+                    ry=DOFConstraint(ry_val),
+                    rz=DOFConstraint(rz_val)
+                )
+                supports.append(sup)
+                
+        # 2. Parse loads
+        for r in range(self.table_loads.rowCount()):
+            node_id_item = self.table_loads.item(r, 0)
+            if node_id_item is None:
+                continue
+            node_ids = self.parse_node_ids(node_id_item.text())
+            
+            try:
+                fx = float(self.table_loads.item(r, 1).text())
+            except (ValueError, AttributeError, TypeError):
+                fx = 0.0
+            try:
+                fy = float(self.table_loads.item(r, 2).text())
+            except (ValueError, AttributeError, TypeError):
+                fy = 0.0
+            try:
+                fz = float(self.table_loads.item(r, 3).text())
+            except (ValueError, AttributeError, TypeError):
+                fz = 0.0
+            try:
+                mx = float(self.table_loads.item(r, 4).text())
+            except (ValueError, AttributeError, TypeError):
+                mx = 0.0
+            try:
+                my = float(self.table_loads.item(r, 5).text())
+            except (ValueError, AttributeError, TypeError):
+                my = 0.0
+            try:
+                mz = float(self.table_loads.item(r, 6).text())
+            except (ValueError, AttributeError, TypeError):
+                mz = 0.0
+                
+            for nid in node_ids:
+                load = LoadDef(
+                    node_id=nid,
+                    is_geometry_node=True,
+                    fx=fx, fy=fy, fz=fz,
+                    mx=mx, my=my, mz=mz
+                )
+                loads.append(load)
+                
+        return supports, loads
+
+    def add_support_row(self):
+        self.table_supports.blockSignals(True)
+        row = self.table_supports.rowCount()
+        self.table_supports.insertRow(row)
+        
+        # Node ID
+        item_node = QTableWidgetItem("0")
+        item_node.setFlags(Qt.ItemIsEnabled | Qt.ItemIsSelectable | Qt.ItemIsEditable)
+        self.table_supports.setItem(row, 0, item_node)
+        
+        # Checkboxes for 6 DOFs
+        for col in range(1, 7):
+            item = QTableWidgetItem()
+            item.setFlags(Qt.ItemIsUserCheckable | Qt.ItemIsEnabled | Qt.ItemIsSelectable)
+            item.setCheckState(Qt.Unchecked)
+            self.table_supports.setItem(row, col, item)
+            
+        self.table_supports.blockSignals(False)
+        self.update_visualization()
+        
+    def remove_support_row(self):
+        selected = self.table_supports.currentRow()
+        if selected >= 0:
+            self.table_supports.removeRow(selected)
+            self.update_visualization()
+            
+    def add_load_row(self):
+        self.table_loads.blockSignals(True)
+        row = self.table_loads.rowCount()
+        self.table_loads.insertRow(row)
+        
+        # Node ID
+        item_node = QTableWidgetItem("1")
+        item_node.setFlags(Qt.ItemIsEnabled | Qt.ItemIsSelectable | Qt.ItemIsEditable)
+        self.table_loads.setItem(row, 0, item_node)
+        
+        # Forces/Moments (col 1-6)
+        for col in range(1, 7):
+            item = QTableWidgetItem("0.0")
+            item.setFlags(Qt.ItemIsEnabled | Qt.ItemIsSelectable | Qt.ItemIsEditable)
+            self.table_loads.setItem(row, col, item)
+            
+        self.table_loads.blockSignals(False)
+        self.update_visualization()
+        
+    def remove_load_row(self):
+        selected = self.table_loads.currentRow()
+        if selected >= 0:
+            self.table_loads.removeRow(selected)
+            self.update_visualization()
+            
+    def refresh_setup_nodes(self):
+        pass
+
+    def update_visualization(self):
+        self.geom_canvas.ax.clear()
+        
+        # Remove old colorbar if it exists
+        if hasattr(self, 'colorbar') and self.colorbar is not None:
+            try:
+                self.colorbar.remove()
+            except Exception:
+                pass
+            self.colorbar = None
+            
+        self.recalculate_section_properties()
+        
+        idx = self.stacked_widget.currentIndex()
+        
+        # Build the preview mesh
+        self.get_preview_mesh()
+        
+        nodes = self.model.mesh_nodes
+        if nodes is None or len(nodes) == 0:
+            return
+            
+        min_bounds = nodes.min(axis=0)
+        max_bounds = nodes.max(axis=0)
+        centers = (min_bounds + max_bounds) / 2.0
+        ranges = (max_bounds - min_bounds) / 2.0
+        max_range = max(ranges.max(), 0.5)
+        
+        self.geom_canvas.ax.set_xlim(centers[0] - max_range, centers[0] + max_range)
+        self.geom_canvas.ax.set_ylim(centers[1] - max_range, centers[1] + max_range)
+        self.geom_canvas.ax.set_zlim(centers[2] - max_range, centers[2] + max_range)
+        
         u_len = "mm" if self.unit_system == "Metric" else "in"
         self.geom_canvas.ax.set_xlabel(f'X ({u_len})')
         self.geom_canvas.ax.set_ylabel(f'Y ({u_len})')
         self.geom_canvas.ax.set_zlabel(f'Z ({u_len})')
         self.geom_canvas.ax.set_box_aspect((1, 1, 1))
+        
+        ro = max(self.y_max, self.z_max)
+        shape = self.combo_shape.currentText()
+        ri = ro * 0.8 if "Tube" in shape or "Beam" in shape else 0.0
+        res = 12
+        
+        if idx == 4 and self.model.displacements is not None:
+            # Page 4 (Results Page): Render deformed shape colored by stress
+            sf = self.sp_scale.value()
+            defs = self.model.displacements.reshape(-1, 6)
+            deformed_nodes = nodes + defs[:, :3] * sf
+            
+            all_stresses = []
+            for elem_idx in range(len(self.model.mesh_elements)):
+                res_elem = self.model.element_results.get(elem_idx, {}) if self.model.element_results else {}
+                stress_val = res_elem.get('von_mises', {}).get('max', 0.0)
+                all_stresses.append(stress_val)
+                
+            vmin, vmax = min(all_stresses) if all_stresses else 0.0, max(all_stresses) if all_stresses else 0.0
+            if vmax - vmin < 1e-3:
+                vmin -= 1e-3
+                vmax += 1e-3
+            norm = plt.Normalize(vmin, vmax)
+            cmap = plt.cm.jet
+            
+            for elem_idx, (n1, n2) in enumerate(self.model.mesh_elements):
+                pt1, pt2 = deformed_nodes[n1], deformed_nodes[n2]
+                c = cmap(norm(all_stresses[elem_idx]))
+                vec = pt2 - pt1
+                mag = np.linalg.norm(vec)
+                if mag < 1e-9: continue
+                vn = vec / mag
+                
+                v1 = np.array([1, 0, 0]) if np.isclose(np.abs(vn[2]), 1) else np.array([0, 0, 1])
+                v1 = v1 - np.dot(v1, vn)*vn
+                v1 /= np.linalg.norm(v1)
+                v2 = np.cross(vn, v1)
+                
+                th = np.linspace(0, 2*np.pi, res)
+                cout = ro * (np.outer(np.cos(th), v1) + np.outer(np.sin(th), v2))
+                
+                v_out = []
+                for j in range(res - 1):
+                    v_out.append([pt1+cout[j], pt1+cout[j+1], pt2+cout[j+1], pt2+cout[j]])
+                v_out.append([pt1+cout[res-1], pt1+cout[0], pt2+cout[0], pt2+cout[res-1]])
+                
+                self.geom_canvas.ax.add_collection3d(Poly3DCollection(v_out, facecolor=c, edgecolor='k', lw=0.15, alpha=0.9))
+                
+                if ri > 0:
+                    cin = ri * (np.outer(np.cos(th), v1) + np.outer(np.sin(th), v2))
+                    v_in = []
+                    for j in range(res - 1):
+                        v_in.append([pt1+cin[j], pt1+cin[j+1], pt2+cin[j+1], pt2+cin[j]])
+                    v_in.append([pt1+cin[res-1], pt1+cin[0], pt2+cin[0], pt2+cin[res-1]])
+                    self.geom_canvas.ax.add_collection3d(Poly3DCollection(v_in, facecolor='gray', edgecolor='k', lw=0.1, alpha=0.4))
+                    
+            sm = plt.cm.ScalarMappable(cmap=cmap, norm=norm)
+            sm.set_array([])
+            u_stress = "MPa" if self.unit_system == "Metric" else "psi"
+            self.colorbar = self.geom_canvas.fig.colorbar(sm, ax=self.geom_canvas.ax, shrink=0.6, aspect=15, pad=0.05)
+            self.colorbar.set_label(f"Von Mises Stress ({u_stress})", color='#9ca3af')
+            self.colorbar.ax.yaxis.set_tick_params(color='#9ca3af')
+            plt.setp(self.colorbar.ax.get_yticklabels(), color='#9ca3af')
+            
+            self.geom_canvas.ax.scatter(deformed_nodes[:,0], deformed_nodes[:,1], deformed_nodes[:,2], color='white', s=50)
+            
+        else:
+            # Undeformed shape
+            for n1, n2 in self.model.mesh_elements:
+                pt1, pt2 = nodes[n1], nodes[n2]
+                vec = pt2 - pt1
+                mag = np.linalg.norm(vec)
+                if mag < 1e-9: continue
+                vn = vec / mag
+                
+                v1 = np.array([1, 0, 0]) if np.isclose(np.abs(vn[2]), 1) else np.array([0, 0, 1])
+                v1 = v1 - np.dot(v1, vn)*vn
+                v1 /= np.linalg.norm(v1)
+                v2 = np.cross(vn, v1)
+                
+                th = np.linspace(0, 2*np.pi, res)
+                cout = ro * (np.outer(np.cos(th), v1) + np.outer(np.sin(th), v2))
+                
+                v_out = []
+                for j in range(res - 1):
+                    v_out.append([pt1+cout[j], pt1+cout[j+1], pt2+cout[j+1], pt2+cout[j]])
+                v_out.append([pt1+cout[res-1], pt1+cout[0], pt2+cout[0], pt2+cout[res-1]])
+                
+                self.geom_canvas.ax.add_collection3d(Poly3DCollection(v_out, facecolor='#06b6d4', edgecolor='k', lw=0.15, alpha=0.8))
+                
+                if ri > 0:
+                    cin = ri * (np.outer(np.cos(th), v1) + np.outer(np.sin(th), v2))
+                    v_in = []
+                    for j in range(res - 1):
+                        v_in.append([pt1+cin[j], pt1+cin[j+1], pt2+cin[j+1], pt2+cin[j]])
+                    v_in.append([pt1+cin[res-1], pt1+cin[0], pt2+cin[0], pt2+cin[res-1]])
+                    self.geom_canvas.ax.add_collection3d(Poly3DCollection(v_in, facecolor='gray', edgecolor='k', lw=0.1, alpha=0.3))
+                    
+            if idx == 1:
+                # Highlight mesh nodes in yellow
+                self.geom_canvas.ax.scatter(nodes[:,0], nodes[:,1], nodes[:,2], color='#eab308', s=60, zorder=5)
+            else:
+                self.geom_canvas.ax.scatter(nodes[:,0], nodes[:,1], nodes[:,2], color='white', s=50, zorder=5)
+                
+            if idx in [2, 3]:
+                # Draw boundary conditions
+                supports, loads = self.get_current_boundary_conditions()
+                geom_nodes = self.model.geometry_nodes
+                
+                for sup in supports:
+                    if sup.node_id in geom_nodes:
+                        coord = geom_nodes[sup.node_id].point.to_array()
+                        self.geom_canvas.ax.scatter([coord[0]], [coord[1]], [coord[2]], color='#22c55e', marker='^', s=120, zorder=10)
+                        
+                for load in loads:
+                    if load.node_id in geom_nodes:
+                        coord = geom_nodes[load.node_id].point.to_array()
+                        fx, fy, fz = load.fx, load.fy, load.fz
+                        f_mag = np.linalg.norm([fx, fy, fz])
+                        if f_mag > 1e-6:
+                            dx, dy, dz = fx/f_mag, fy/f_mag, fz/f_mag
+                            L_arrow = 0.3 * max_range
+                            self.geom_canvas.ax.quiver(
+                                coord[0], coord[1], coord[2], dx, dy, dz,
+                                length=L_arrow, color='#ef4444', lw=2, arrow_length_ratio=0.3, zorder=15
+                            )
+                            
         self.geom_canvas.draw()
 
     def create_meshing_page(self):
@@ -1011,88 +1340,123 @@ class FEAEngineApp(QMainWindow):
     def create_setup_page(self):
         page = QWidget()
         layout = QVBoxLayout(page)
-        layout.setContentsMargins(40, 40, 40, 40)
+        layout.setContentsMargins(15, 15, 15, 15)
         
         header = QLabel("⚡ Problem Setup")
         header.setStyleSheet("font-size: 24px; font-weight: bold; color: #ffffff;")
         layout.addWidget(header)
         
-        # Materials (Steel in MPa)
+        setup_tabs = QTabWidget()
+        
+        # --- Tab 1: Materials ---
+        mat_tab = QWidget()
+        mat_layout = QVBoxLayout(mat_tab)
+        mat_layout.setContentsMargins(10, 10, 10, 10)
+        
         m_grp = QGroupBox("Material Properties")
-        m_layout = QGridLayout(m_grp)
+        m_grid = QGridLayout(m_grp)
         
         self.combo_mat = QComboBox()
         self.combo_mat.addItems(["Structural Steel", "Aluminum 6061-T6", "Titanium Grade 5", "Custom"])
-        m_layout.addWidget(QLabel("Preset:"), 0, 0)
-        m_layout.addWidget(self.combo_mat, 0, 1)
+        m_grid.addWidget(QLabel("Preset:"), 0, 0)
+        m_grid.addWidget(self.combo_mat, 0, 1)
         
         self.lbl_E_name = QLabel("Young's Modulus (MPa):")
-        m_layout.addWidget(self.lbl_E_name, 1, 0)
+        m_grid.addWidget(self.lbl_E_name, 1, 0)
         self.sp_E = QDoubleSpinBox()
         self.sp_E.setRange(100.0, 1000000.0)
         self.sp_E.setValue(200000.0)
-        m_layout.addWidget(self.sp_E, 1, 1)
+        m_grid.addWidget(self.sp_E, 1, 1)
         
-        m_layout.addWidget(QLabel("Poisson's Ratio:"), 2, 0)
+        m_grid.addWidget(QLabel("Poisson's Ratio:"), 2, 0)
         self.sp_nu = QDoubleSpinBox()
         self.sp_nu.setRange(0.0, 0.49)
         self.sp_nu.setSingleStep(0.01)
         self.sp_nu.setValue(0.27)
-        m_layout.addWidget(self.sp_nu, 2, 1)
+        m_grid.addWidget(self.sp_nu, 2, 1)
         
         self.lbl_yield_name = QLabel("Yield Strength (MPa):")
-        m_layout.addWidget(self.lbl_yield_name, 3, 0)
+        m_grid.addWidget(self.lbl_yield_name, 3, 0)
         self.sp_yield = QDoubleSpinBox()
         self.sp_yield.setRange(1.0, 10000.0)
         self.sp_yield.setValue(250.0)
-        m_layout.addWidget(self.sp_yield, 3, 1)
+        m_grid.addWidget(self.sp_yield, 3, 1)
         
         self.lbl_density_name = QLabel("Density (tonne/mm³):")
-        m_layout.addWidget(self.lbl_density_name, 4, 0)
+        m_grid.addWidget(self.lbl_density_name, 4, 0)
         self.sp_density = QDoubleSpinBox()
         self.sp_density.setDecimals(12)
         self.sp_density.setRange(1e-12, 1.0)
         self.sp_density.setValue(7.85e-9)
         self.sp_density.setSingleStep(1e-9)
-        m_layout.addWidget(self.sp_density, 4, 1)
+        m_grid.addWidget(self.sp_density, 4, 1)
         
-        layout.addWidget(m_grp)
+        mat_layout.addWidget(m_grp)
+        mat_layout.addStretch()
+        setup_tabs.addTab(mat_tab, "Materials")
         
-        # Loads in N and N-mm
-        l_grp = QGroupBox("Tip Point Loads")
-        l_layout = QGridLayout(l_grp)
+        # --- Tab 2: Boundary Conditions (Supports) ---
+        sup_tab = QWidget()
+        sup_layout = QVBoxLayout(sup_tab)
+        sup_layout.setContentsMargins(10, 10, 10, 10)
         
-        self.sp_fx = QDoubleSpinBox()
-        self.sp_fx.setRange(-1e9, 1e9)
-        self.sp_fx.setValue(0.0)
-        self.lbl_fx_name = QLabel("Axial Fx (N):")
-        l_layout.addWidget(self.lbl_fx_name, 0, 0)
-        l_layout.addWidget(self.sp_fx, 0, 1)
+        self.table_supports = QTableWidget()
+        self.table_supports.setColumnCount(7)
+        self.table_supports.setHorizontalHeaderLabels(["Node ID(s)", "Ux", "Uy", "Uz", "Rx", "Ry", "Rz"])
+        self.table_supports.horizontalHeader().setSectionResizeMode(QHeaderView.Stretch)
+        sup_layout.addWidget(self.table_supports)
         
-        self.sp_fy = QDoubleSpinBox()
-        self.sp_fy.setRange(-1e9, 1e9)
-        self.sp_fy.setValue(-1000.0)
-        self.lbl_fy_name = QLabel("Shear Fy (N):")
-        l_layout.addWidget(self.lbl_fy_name, 1, 0)
-        l_layout.addWidget(self.sp_fy, 1, 1)
+        sup_btns = QHBoxLayout()
+        self.btn_add_sup = QPushButton("➕ Add Support")
+        self.btn_add_sup.clicked.connect(self.add_support_row)
+        self.btn_rem_sup = QPushButton("❌ Remove Selected")
+        self.btn_rem_sup.clicked.connect(self.remove_support_row)
+        sup_btns.addWidget(self.btn_add_sup)
+        sup_btns.addWidget(self.btn_rem_sup)
+        sup_layout.addLayout(sup_btns)
         
-        self.sp_fz = QDoubleSpinBox()
-        self.sp_fz.setRange(-1e9, 1e9)
-        self.sp_fz.setValue(0.0)
-        self.lbl_fz_name = QLabel("Shear Fz (N):")
-        l_layout.addWidget(self.lbl_fz_name, 2, 0)
-        l_layout.addWidget(self.sp_fz, 2, 1)
+        setup_tabs.addTab(sup_tab, "Supports (Fixed DOFs)")
         
-        self.sp_mx = QDoubleSpinBox()
-        self.sp_mx.setRange(-1e9, 1e9)
-        self.sp_mx.setValue(0.0)
-        self.lbl_mx_name = QLabel("Torsion Mx (N-mm):")
-        l_layout.addWidget(self.lbl_mx_name, 3, 0)
-        l_layout.addWidget(self.sp_mx, 3, 1)
+        # --- Tab 3: Applied Loads ---
+        load_tab = QWidget()
+        load_layout = QVBoxLayout(load_tab)
+        load_layout.setContentsMargins(10, 10, 10, 10)
         
-        layout.addWidget(l_grp)
-        layout.addStretch()
+        self.table_loads = QTableWidget()
+        self.table_loads.setColumnCount(7)
+        self.table_loads.setHorizontalHeaderLabels(["Node ID(s)", "Fx (N)", "Fy (N)", "Fz (N)", "Mx (N-mm)", "My (N-mm)", "Mz (N-mm)"])
+        self.table_loads.horizontalHeader().setSectionResizeMode(QHeaderView.Stretch)
+        load_layout.addWidget(self.table_loads)
+        
+        load_btns = QHBoxLayout()
+        self.btn_add_load = QPushButton("➕ Add Load")
+        self.btn_add_load.clicked.connect(self.add_load_row)
+        self.btn_rem_load = QPushButton("❌ Remove Selected")
+        self.btn_rem_load.clicked.connect(self.remove_load_row)
+        load_btns.addWidget(self.btn_add_load)
+        load_btns.addWidget(self.btn_rem_load)
+        load_layout.addLayout(load_btns)
+        
+        setup_tabs.addTab(load_tab, "Loads")
+        
+        layout.addWidget(setup_tabs)
         self.stacked_widget.addWidget(page)
+        
+        # Default row initialization
+        self.add_support_row()
+        item_node = self.table_supports.item(0, 0)
+        if item_node is not None:
+            item_node.setText("0")
+        for col in range(1, 7):
+            self.table_supports.item(0, col).setCheckState(Qt.Checked)
+            
+        self.add_load_row()
+        item_node_load = self.table_loads.item(0, 0)
+        if item_node_load is not None:
+            item_node_load.setText("1")
+        item_fy = self.table_loads.item(0, 2)
+        if item_fy is not None:
+            item_fy.setText("-1000.0")
 
     def create_solving_page(self):
         page = QWidget()
@@ -1118,12 +1482,10 @@ class FEAEngineApp(QMainWindow):
     def create_results_page(self):
         page = QWidget()
         layout = QVBoxLayout(page)
-        layout.setContentsMargins(20, 20, 20, 20)
+        layout.setContentsMargins(15, 15, 15, 15)
         
-        # Metrics Top Bar (Consistent Units)
         metrics_layout = QHBoxLayout()
         
-        # Tip Deflection Card
         grp1 = QWidget()
         grp1.setStyleSheet("background-color: #1e2942; border-radius: 8px;")
         l1 = QVBoxLayout(grp1)
@@ -1137,7 +1499,6 @@ class FEAEngineApp(QMainWindow):
         l1.addWidget(self.lbl_deflection)
         metrics_layout.addWidget(grp1)
         
-        # Stress Card
         grp2 = QWidget()
         grp2.setStyleSheet("background-color: #1e2942; border-radius: 8px;")
         l2 = QVBoxLayout(grp2)
@@ -1151,7 +1512,6 @@ class FEAEngineApp(QMainWindow):
         l2.addWidget(self.lbl_stress)
         metrics_layout.addWidget(grp2)
         
-        # Safety Factor Card
         grp3 = QWidget()
         grp3.setStyleSheet("background-color: #1e2942; border-radius: 8px;")
         l3 = QVBoxLayout(grp3)
@@ -1167,51 +1527,38 @@ class FEAEngineApp(QMainWindow):
         
         layout.addLayout(metrics_layout)
         
-        # Visual & Data Splitting
-        tabs = QTabWidget()
-        
-        # Plot Tab
-        plot_tab = QWidget()
-        plot_layout = QVBoxLayout(plot_tab)
-        
-        vis_controls = QHBoxLayout()
-        vis_controls.addWidget(QLabel("Deflection Scale Factor:"))
+        vis_grp = QGroupBox("Visualization Controls")
+        vis_layout = QHBoxLayout(vis_grp)
+        vis_layout.addWidget(QLabel("Deflection Scale Factor:"))
         self.sp_scale = QSpinBox()
         self.sp_scale.setRange(1, 500)
         self.sp_scale.setValue(50)
         self.sp_scale.valueChanged.connect(self.update_plot_only)
-        vis_controls.addWidget(self.sp_scale)
-        vis_controls.addStretch()
-        plot_layout.addLayout(vis_controls)
+        vis_layout.addWidget(self.sp_scale)
+        vis_layout.addStretch()
+        layout.addWidget(vis_grp)
         
-        self.canvas = MatplotlibCanvas(self)
-        plot_layout.addWidget(self.canvas)
-        tabs.addTab(plot_tab, "3D Visualization")
+        tabs = QTabWidget()
         
-        # Nodes Tab
         self.table_nodes = QTableWidget()
         self.table_nodes.setColumnCount(7)
         self.table_nodes.setHorizontalHeaderLabels(["Node ID", "Disp X (mm)", "Disp Y (mm)", "Disp Z (mm)", "Rx (rad)", "Ry (rad)", "Rz (rad)"])
         self.table_nodes.horizontalHeader().setSectionResizeMode(QHeaderView.Stretch)
         tabs.addTab(self.table_nodes, "Nodal Displacements")
         
-        # Elements Tab
         self.table_elements = QTableWidget()
         self.table_elements.setColumnCount(7)
         self.table_elements.setHorizontalHeaderLabels(["Element ID", "Connectivity", "Axial Fx (N)", "Torsion Mx (N-mm)", "Bending My (N-mm)", "Bending Mz (N-mm)", "Max VM (MPa)"])
         self.table_elements.horizontalHeader().setSectionResizeMode(QHeaderView.Stretch)
         tabs.addTab(self.table_elements, "Element Stresses")
         
-        # --- Interactive Stress Calculator Tab in mm and N-mm ---
         calc_tab = QWidget()
         calc_layout = QHBoxLayout(calc_tab)
         calc_layout.setContentsMargins(20, 20, 20, 20)
         
-        # Left side inputs
         self.calc_inputs_grp = QGroupBox("Interactive Parameters (mm, N-mm)")
         inputs_layout = QGridLayout(self.calc_inputs_grp)
         
-        # Bending Moment Slider & Spinbox
         self.lbl_calc_m_name = QLabel("Bending Moment Mz (N-mm):")
         inputs_layout.addWidget(self.lbl_calc_m_name, 0, 0)
         self.calc_m = QSpinBox()
@@ -1226,7 +1573,6 @@ class FEAEngineApp(QMainWindow):
         self.slider_calc_m.setSingleStep(50000)
         inputs_layout.addWidget(self.slider_calc_m, 1, 0, 1, 2)
         
-        # Outer Radius Slider & Spinbox
         self.lbl_calc_rout_name = QLabel("Outer Radius (mm):")
         inputs_layout.addWidget(self.lbl_calc_rout_name, 2, 0)
         self.calc_rout = QDoubleSpinBox()
@@ -1240,7 +1586,6 @@ class FEAEngineApp(QMainWindow):
         self.slider_calc_rout.setValue(100)
         inputs_layout.addWidget(self.slider_calc_rout, 3, 0, 1, 2)
         
-        # Inner Radius Slider & Spinbox
         self.lbl_calc_rin_name = QLabel("Inner Radius (mm):")
         inputs_layout.addWidget(self.lbl_calc_rin_name, 4, 0)
         self.calc_rin = QDoubleSpinBox()
@@ -1256,11 +1601,9 @@ class FEAEngineApp(QMainWindow):
         
         calc_layout.addWidget(self.calc_inputs_grp, 4)
         
-        # Right side outputs
         outputs_grp = QGroupBox("Analytical Results")
         outputs_layout = QVBoxLayout(outputs_grp)
         
-        # Moment of inertia output card
         card_iz = QWidget()
         card_iz.setStyleSheet("background-color: #0b0f19; border-radius: 8px; border: 1px solid rgba(255, 255, 255, 0.05);")
         l_iz = QVBoxLayout(card_iz)
@@ -1278,7 +1621,6 @@ class FEAEngineApp(QMainWindow):
         l_iz.addWidget(self.lbl_calc_iz_unit)
         outputs_layout.addWidget(card_iz)
         
-        # Bending stress output card
         card_sig = QWidget()
         card_sig.setStyleSheet("background-color: #0b0f19; border-radius: 8px; border: 1px solid rgba(255, 255, 255, 0.05);")
         l_sig = QVBoxLayout(card_sig)
@@ -1296,7 +1638,6 @@ class FEAEngineApp(QMainWindow):
         l_sig.addWidget(self.lbl_calc_sigma_unit)
         outputs_layout.addWidget(card_sig)
         
-        # Von Mises output card
         card_vm = QWidget()
         card_vm.setStyleSheet("background-color: #0b0f19; border-radius: 8px; border: 1px solid rgba(255, 255, 255, 0.05);")
         l_vm = QVBoxLayout(card_vm)
@@ -1317,7 +1658,6 @@ class FEAEngineApp(QMainWindow):
         calc_layout.addWidget(outputs_grp, 3)
         tabs.addTab(calc_tab, "Stress Calculator")
         
-        # Connect interactive stress calculator signals
         self.calc_m.valueChanged.connect(self.slider_calc_m.setValue)
         self.slider_calc_m.valueChanged.connect(self.calc_m.setValue)
         
@@ -1329,7 +1669,6 @@ class FEAEngineApp(QMainWindow):
         
         self.calc_m.valueChanged.connect(self.recalculate_analytical_stress)
         
-        # Run initial calculation
         self.recalculate_analytical_stress()
         
         layout.addWidget(tabs)
@@ -1338,6 +1677,9 @@ class FEAEngineApp(QMainWindow):
     def setup_connections(self):
         self.combo_mat.currentIndexChanged.connect(self.on_material_change)
         self.combo_units.currentIndexChanged.connect(self.on_unit_system_changed)
+        self.table_supports.itemChanged.connect(self.update_visualization)
+        self.table_loads.itemChanged.connect(self.update_visualization)
+        self.sp_elements.valueChanged.connect(self.update_visualization)
         
     def on_material_change(self):
         mat = self.combo_mat.currentText()
@@ -1442,7 +1784,6 @@ class FEAEngineApp(QMainWindow):
         self.unit_system = new_system
         is_metric = (new_system == "Metric")
         
-        # --- Length conversions ---
         len_factor = IN_TO_MM if is_metric else MM_TO_IN
         l_min, l_max = (100.0, 50000.0) if is_metric else (4.0, 2000.0)
         self.scale_spinbox(self.sp_length, len_factor, l_min, l_max)
@@ -1456,18 +1797,15 @@ class FEAEngineApp(QMainWindow):
         for spin in shape_spins:
             self.scale_spinbox(spin, len_factor, s_min, s_max)
             
-        # General Area (mm² <-> in²)
         a_factor = IN_TO_MM**2 if is_metric else MM_TO_IN**2
         a_min, a_max = (1.0, 1e8) if is_metric else (0.0015, 1.55e5)
         self.scale_spinbox(self.gen_a, a_factor, a_min, a_max)
         
-        # General Inertia (mm⁴ <-> in⁴)
         i_factor = IN_TO_MM**4 if is_metric else MM_TO_IN**4
         i_min, i_max = (1.0, 1e12) if is_metric else (2.4e-6, 2.4e6)
         for spin in [self.gen_iy, self.gen_iz, self.gen_j]:
             self.scale_spinbox(spin, i_factor, i_min, i_max)
             
-        # --- Stress / Elastic Modulus conversions ---
         stress_factor = PSI_TO_MPA if is_metric else MPA_TO_PSI
         e_min, e_max = (100.0, 1000000.0) if is_metric else (14500.0, 1.45e8)
         self.scale_spinbox(self.sp_E, stress_factor, e_min, e_max)
@@ -1475,23 +1813,19 @@ class FEAEngineApp(QMainWindow):
         y_min, y_max_val = (1.0, 10000.0) if is_metric else (145.0, 1.45e6)
         self.scale_spinbox(self.sp_yield, stress_factor, y_min, y_max_val)
         
-        # --- Density conversions ---
         dens_factor = LBM_IN3_TO_TONNE_MM3 if is_metric else TONNE_MM3_TO_LBM_IN3
         d_min, d_max = (1e-12, 1.0) if is_metric else (1e-5, 10.0)
         self.scale_spinbox(self.sp_density, dens_factor, d_min, d_max, decimals=12 if is_metric else 6)
         
-        # --- Force conversions ---
         force_factor = LBF_TO_N if is_metric else N_TO_LBF
         f_min, f_max = (-1e9, 1e9) if is_metric else (-2.24e8, 2.24e8)
         for spin in [self.sp_fx, self.sp_fy, self.sp_fz]:
             self.scale_spinbox(spin, force_factor, f_min, f_max)
             
-        # --- Moment conversions ---
         mom_factor = LBFIN_TO_NMM if is_metric else NMM_TO_LBFIN
         m_min, m_max = (-1e9, 1e9) if is_metric else (-8.85e6, 8.85e6)
         self.scale_spinbox(self.sp_mx, mom_factor, m_min, m_max)
         
-        # --- Interactive Stress Calculator conversions ---
         self.calc_m.blockSignals(True)
         self.slider_calc_m.blockSignals(True)
         m_c_min, m_c_max = (100000, 5000000) if is_metric else (885, 44253)
@@ -1518,20 +1852,35 @@ class FEAEngineApp(QMainWindow):
         self.slider_calc_rout.blockSignals(False)
         self.slider_calc_rin.blockSignals(False)
         
-        # Convert parsed CAD node coordinates if they exist
-        if self.imported_nodes is not None and len(self.imported_nodes) > 0:
-            self.imported_nodes *= len_factor
+        # Convert geometry node coordinates in self.model
+        for node in self.model.geometry_nodes.values():
+            node.point.x *= len_factor
+            node.point.y *= len_factor
+            node.point.z *= len_factor
+            
+        # Convert existing rows in table_loads
+        self.table_loads.blockSignals(True)
+        for r in range(self.table_loads.rowCount()):
+            for c in range(1, 7):
+                item = self.table_loads.item(r, c)
+                if item is not None:
+                    try:
+                        val = float(item.text())
+                        if c in [1, 2, 3]: # Force
+                            val *= force_factor
+                        else: # Moment
+                            val *= mom_factor
+                        item.setText(f"{val:.2f}")
+                    except ValueError:
+                        item.setText("0.0")
+        self.table_loads.blockSignals(False)
 
-        # Update Table Headers & Labels
         self.update_ui_labels()
-        
         self.update_section_calculation()
-        self.update_geometry_preview()
+        self.update_visualization()
         self.recalculate_analytical_stress()
         
-        # Converted active FEA Results if they exist
         if self.U is not None:
-            # U conversions (translations by len_factor, rotations unchanged)
             for i in range(len(self.nodes_3d)):
                 self.U[i*6 + 0] *= len_factor
                 self.U[i*6 + 1] *= len_factor
@@ -1542,12 +1891,10 @@ class FEAEngineApp(QMainWindow):
             self.total_deflection *= len_factor
             
             for idx, res in self.element_results.items():
-                res['von_mises_stresses']['max'] *= stress_factor
-                f = res['local_forces_moments']
-                # forces
+                res['von_mises']['max'] *= stress_factor
+                f = res['local_forces']
                 f[0] *= force_factor; f[1] *= force_factor; f[2] *= force_factor
                 f[6] *= force_factor; f[7] *= force_factor; f[8] *= force_factor
-                # moments
                 f[3] *= mom_factor; f[4] *= mom_factor; f[5] *= mom_factor
                 f[9] *= mom_factor; f[10] *= mom_factor; f[11] *= mom_factor
                 
@@ -1630,136 +1977,56 @@ class FEAEngineApp(QMainWindow):
         self.log_output.clear()
         self.log("[System] Initializing FEA solver...")
         
-        # Force a fresh section calculation to ensure variables are in sync
         self.recalculate_section_properties()
         
-        beam_length = self.sp_length.value()
-        num_elements = self.sp_elements.value()
-        E = self.sp_E.value()
-        nu = self.sp_nu.value()
-        yield_strength = self.sp_yield.value()
+        self.get_preview_mesh()
         
-        fx, fy, fz, mx = self.sp_fx.value(), self.sp_fy.value(), self.sp_fz.value(), self.sp_mx.value()
+        supports, loads = self.get_current_boundary_conditions()
+        self.model.supports = supports
+        self.model.loads = loads
         
-        cs = {
-            "Area": self.A, 
-            "Iy": self.Iy, 
-            "Iz": self.Iz, 
-            "J": self.J, 
-            "y_max": self.y_max, 
-            "z_max": self.z_max
-        }
-        mat = {"youngs_modulus": E, "poissons_ratio": nu}
+        self.log(f"[BCs] Applied {len(supports)} supports and {len(loads)} point loads.")
         
-        # Mesh Generation
-        u_len = "mm" if self.unit_system == "Metric" else "in"
-        self.log(f"[Mesh] Generating {num_elements} elements over {beam_length} {u_len}...")
-        x_coords = np.linspace(0.0, beam_length, num_elements + 1)
-        self.nodes_3d = np.zeros((num_elements + 1, 3))
-        self.nodes_3d[:, 0] = x_coords
-        self.elements_3d = np.array([[i, i+1] for i in range(num_elements)])
-        
-        num_nodes = len(self.nodes_3d)
-        K = np.zeros((num_nodes*6, num_nodes*6))
-        F = np.zeros(num_nodes*6)
-        
-        # Apply Loads
-        tip = num_nodes - 1
-        F[tip*6 + 0] = fx
-        F[tip*6 + 1] = fy
-        F[tip*6 + 2] = fz
-        F[tip*6 + 3] = mx
-        
-        self.log("[Assemble] Building global stiffness matrix...")
-        for n1, n2 in self.elements_3d:
-            Ke = self.calculate_ke(self.nodes_3d[n1], self.nodes_3d[n2], mat, cs)
-            dofs = np.concatenate([np.arange(n1*6, n1*6+6), np.arange(n2*6, n2*6+6)])
-            for i in range(12):
-                for j in range(12):
-                    K[dofs[i], dofs[j]] += Ke[i, j]
-                    
-        # Apply BCs
-        for dof in range(6):
-            K[dof, :] = 0; K[:, dof] = 0; K[dof, dof] = 1; F[dof] = 0
-            
-        # Solve
-        self.log("[Solve] Inverting stiffness matrix...")
-        try:
-            self.U = solve(K, F)
-            self.log("[Success] Displacements computed.")
-        except Exception as e:
-            self.log(f"[Error] Solver failed: {e}")
+        errors = self.model.validate_for_solving()
+        if errors:
+            self.log("[Validation Error] Cannot run solver:")
+            for err in errors:
+                self.log(f"  • {err}")
             return
             
-        # Post-Processing
-        self.element_results = {}
-        self.max_model_stress = 0.0
+        self.log("[Solve] Solving linear static system using WNFEA solver...")
         
-        self.log("[Post] Calculating elemental stresses...")
-        for idx, (n1, n2) in enumerate(self.elements_3d):
-            res = self.calculate_stress(self.nodes_3d[n1], self.nodes_3d[n2], [n1, n2], self.U, mat, cs)
-            self.element_results[idx] = res
-            if res['von_mises_stresses']['max'] > self.max_model_stress:
-                self.max_model_stress = res['von_mises_stresses']['max']
-                
-        tip_dx, tip_dy, tip_dz = self.U[tip*6+0], self.U[tip*6+1], self.U[tip*6+2]
-        self.total_deflection = np.sqrt(tip_dx**2 + tip_dy**2 + tip_dz**2)
-        self.safety_factor = yield_strength / self.max_model_stress if self.max_model_stress > 1e-3 else 999.0
-        
-        self.log("[Finished] Simulation complete. Navigating to results...")
-        self.update_results_ui()
-        self.switch_page(4)  # Go to results tab
-
-    def calculate_ke(self, n1, n2, mat, cs):
-        E, G = mat['youngs_modulus'], mat['youngs_modulus'] / (2*(1+mat['poissons_ratio']))
-        A, Iy, Iz, J = cs['Area'], cs['Iy'], cs['Iz'], cs['J']
-        L = np.linalg.norm(n2 - n1)
-        if L < 1e-9: return np.zeros((12, 12))
-        
-        K = np.zeros((12, 12))
-        axial = E*A/L
-        K[0,0] = K[6,6] = axial; K[0,6] = K[6,0] = -axial
-        torsion = G*J/L
-        K[3,3] = K[9,9] = torsion; K[3,9] = K[9,3] = -torsion
-        bz1, bz2, bz3, bz4 = 12*E*Iz/L**3, 6*E*Iz/L**2, 4*E*Iz/L, 2*E*Iz/L
-        K[1,1] = K[7,7] = bz1; K[1,7] = K[7,1] = -bz1
-        K[1,5] = K[5,1] = K[1,11] = K[11,1] = bz2
-        K[5,5] = K[11,11] = bz3; K[5,11] = K[11,5] = bz4
-        K[5,7] = K[7,5] = K[7,11] = K[11,7] = -bz2
-        by1, by2, by3, by4 = 12*E*Iy/L**3, 6*E*Iy/L**2, 4*E*Iy/L, 2*E*Iy/L
-        K[2,2] = K[8,8] = by1; K[2,8] = K[8,2] = -by1
-        K[2,4] = K[4,2] = K[2,10] = K[10,2] = -by2
-        K[4,4] = K[10,10] = by3; K[4,10] = K[10,4] = by4
-        K[4,8] = K[8,4] = K[8,10] = K[10,8] = by2
-        return K
-
-    def calculate_stress(self, p1, p2, indices, U, mat, cs):
-        E, nu = mat['youngs_modulus'], mat['poissons_ratio']
-        A, Iy, Iz, J = cs['Area'], cs['Iy'], cs['Iz'], cs['J']
-        y_max, z_max = cs['y_max'], cs['z_max']
-        L = np.linalg.norm(p2 - p1)
-        if L < 1e-9: return {'local_forces_moments': np.zeros(12), 'von_mises_stresses': {'max': 0.0}}
-        
-        vec = (p2 - p1) / L
-        R = np.eye(3)
-        T_node = np.zeros((6,6)); T_node[:3,:3] = T_node[3:,3:] = R
-        T = np.zeros((12,12)); T[:6,:6] = T[6:12,6:12] = T_node
-        
-        dofs = [idx*6+i for idx in indices for i in range(6)]
-        u_local = T @ U[dofs]
-        f_local = self.calculate_ke(p1, p2, mat, cs) @ u_local
-        
-        Fx2, Mx2, My2, Mz2 = f_local[6], f_local[9], f_local[10], f_local[11]
-        
-        vm_list = []
-        # Check stresses at extreme points
-        for yp, zp in [[y_max, 0.0], [-y_max, 0.0], [0.0, z_max], [0.0, -z_max]]:
-            sig = Fx2/A + (-Mz2*yp)/Iz + (My2*zp)/Iy if Iz > 1e-12 and Iy > 1e-12 else Fx2/A
-            r_outer = max(y_max, z_max)
-            tau = (np.abs(Mx2)*r_outer)/J if J > 1e-12 else 0.0
-            vm_list.append(np.sqrt(sig**2 + 3.0*tau**2))
+        try:
+            self.log("[Solver] Assembling global stiffness matrix and solving K * U = F...")
+            U = solve_linear_static(self.model)
             
-        return {'local_forces_moments': f_local, 'von_mises_stresses': {'max': max(vm_list)}}
+            self.log("[Solver] Computing element stresses and internal forces...")
+            element_results = compute_element_stresses(self.model)
+            
+            self.log("[Solver] Analyzing result set...")
+            rs = ResultSet(self.model)
+            max_node, max_defl = rs.max_deflection()
+            max_elem, max_vm = rs.max_von_mises()
+            sf = rs.safety_factor()
+            
+            self.U = U
+            self.nodes_3d = self.model.mesh_nodes
+            self.elements_3d = self.model.mesh_elements
+            self.element_results = self.model.element_results
+            self.max_model_stress = max_vm
+            self.total_deflection = max_defl
+            self.safety_factor = sf
+            
+            self.log("[Success] Simulation completed successfully.")
+            self.log(f"  • Max Deflection: {max_defl:.4e} {self.unit_system}")
+            self.log(f"  • Max Von Mises: {max_vm:.3e} {self.unit_system}")
+            self.log(f"  • Min Safety Factor: {sf:.2f}")
+            
+            self.update_results_ui()
+            self.switch_page(4)
+            
+        except Exception as e:
+            self.log(f"[Error] Solver failed: {e}")
 
     def update_results_ui(self):
         self.lbl_deflection.setText(f"{self.total_deflection:.4f}")
@@ -1773,9 +2040,8 @@ class FEAEngineApp(QMainWindow):
         else:
             self.lbl_safety.setStyleSheet("color: #ef4444;")
             
-        self.update_plot_only()
+        self.update_visualization()
         
-        # Populate Tables (Direct N-mm and mm units)
         self.table_nodes.setRowCount(len(self.nodes_3d))
         for i in range(len(self.nodes_3d)):
             d = self.U[i*6:i*6+6]
@@ -1785,77 +2051,17 @@ class FEAEngineApp(QMainWindow):
                 
         self.table_elements.setRowCount(len(self.elements_3d))
         for i, res in self.element_results.items():
-            f = res['local_forces_moments']
+            f = res['local_forces']
             row_data = [
                 str(i), f"{self.elements_3d[i][0]}->{self.elements_3d[i][1]}",
                 f"{f[6]:.2f}", f"{f[9]:.2f}", f"{f[10]:.2f}", f"{f[11]:.2f}",
-                f"{res['von_mises_stresses']['max']:.3f}"
+                f"{res['von_mises']['max']:.3f}"
             ]
             for col, text in enumerate(row_data):
                 self.table_elements.setItem(i, col, QTableWidgetItem(text))
 
     def update_plot_only(self):
-        if self.U is None: return
-        self.canvas.ax.clear()
-        
-        sf = self.sp_scale.value()
-        defs = self.U.reshape(-1, 6)
-        deformed = self.nodes_3d + defs[:, :3] * sf
-        
-        all_stresses = [res['von_mises_stresses']['max'] for res in self.element_results.values()]
-        vmin, vmax = min(all_stresses), max(all_stresses)
-        if vmax - vmin < 1e-3: vmin -= 1e3; vmax += 1e3
-        norm = plt.Normalize(vmin, vmax)
-        cmap = plt.cm.jet
-        
-        ro = max(self.y_max, self.z_max)
-        shape = self.combo_shape.currentText()
-        ri = ro * 0.8 if "Tube" in shape or "Beam" in shape else 0.0
-        res = 12
-        
-        for i, (n1, n2) in enumerate(self.elements_3d):
-            pt1, pt2 = deformed[n1], deformed[n2]
-            c = cmap(norm(all_stresses[i]))
-            vec = pt2 - pt1
-            mag = np.linalg.norm(vec)
-            if mag < 1e-9: continue
-            vn = vec / mag
-            
-            v1 = np.array([1, 0, 0]) if np.isclose(np.abs(vn[2]), 1) else np.array([0, 0, 1])
-            v1 = v1 - np.dot(v1, vn)*vn
-            v1 /= np.linalg.norm(v1)
-            v2 = np.cross(vn, v1)
-            
-            th = np.linspace(0, 2*np.pi, res)
-            cout = ro * (np.outer(np.cos(th), v1) + np.outer(np.sin(th), v2))
-            
-            v_out = []
-            for j in range(res - 1):
-                v_out.append([pt1+cout[j], pt1+cout[j+1], pt2+cout[j+1], pt2+cout[j]])
-            v_out.append([pt1+cout[res-1], pt1+cout[0], pt2+cout[0], pt2+cout[res-1]])
-            
-            self.canvas.ax.add_collection3d(Poly3DCollection(v_out, facecolor=c, edgecolor='k', lw=0.15, alpha=0.9))
-            
-            if ri > 0:
-                cin = ri * (np.outer(np.cos(th), v1) + np.outer(np.sin(th), v2))
-                v_in = []
-                for j in range(res - 1):
-                    v_in.append([pt1+cin[j], pt1+cin[j+1], pt2+cin[j+1], pt2+cin[j]])
-                v_in.append([pt1+cin[res-1], pt1+cin[0], pt2+cin[0], pt2+cin[res-1]])
-                self.canvas.ax.add_collection3d(Poly3DCollection(v_in, facecolor='gray', edgecolor='k', lw=0.1, alpha=0.4))
-            
-        self.canvas.ax.scatter(deformed[:,0], deformed[:,1], deformed[:,2], color='white', s=50)
-        
-        L = self.sp_length.value()
-        self.canvas.ax.set_xlim(L/2 - L*0.6, L/2 + L*0.6)
-        self.canvas.ax.set_ylim(-L*0.6, L*0.6)
-        self.canvas.ax.set_zlim(-L*0.6, L*0.6)
-        u_len = "mm" if self.unit_system == "Metric" else "in"
-        self.canvas.ax.set_xlabel(f'X ({u_len})')
-        self.canvas.ax.set_ylabel(f'Y ({u_len})')
-        self.canvas.ax.set_zlabel(f'Z ({u_len})')
-        self.canvas.ax.set_box_aspect((1, 1, 1))
-        self.canvas.draw()
+        self.update_visualization()
 
 if __name__ == "__main__":
     # Workaround for high DPI displays
