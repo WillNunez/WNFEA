@@ -1,191 +1,15 @@
-import streamlit as st
+import customtkinter as ctk
+import tkinter.ttk as ttk
 import numpy as np
 import matplotlib.pyplot as plt
+from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg
 from mpl_toolkits.mplot3d.art3d import Poly3DCollection
 from scipy.linalg import solve
-import pandas as pd
 
-# Set premium dark-themed page config
-st.set_page_config(
-    page_title="3D spatial Structural FEA Engine",
-    page_icon="🏗️",
-    layout="wide",
-    initial_sidebar_state="expanded"
-)
+ctk.set_appearance_mode("dark")
+ctk.set_default_color_theme("blue")
 
-# Custom premium styling rules
-st.markdown("""
-<style>
-    .reportview-container {
-        background: #0b0f19;
-    }
-    .metric-card {
-        background: #1e2942;
-        border: 1px solid rgba(255,255,255,0.06);
-        border-radius: 12px;
-        padding: 1.5rem;
-        text-align: center;
-        box-shadow: 0 4px 15px rgba(0,0,0,0.25);
-    }
-    .metric-val {
-        font-size: 2.25rem;
-        font-weight: 700;
-        color: #06b6d4;
-        margin-top: 0.5rem;
-    }
-    .metric-title {
-        color: #9ca3af;
-        font-size: 0.875rem;
-        text-transform: uppercase;
-        letter-spacing: 0.1em;
-    }
-</style>
-""", unsafe_allow_html=True)
-
-st.title("🏗️ 3D Beam Finite Element Analysis (FEA) Engine")
-st.markdown("A premium, real-time spatial simulator to calculate nodal displacements, coordinate system transformations, stress distributions, and volumetric yielding limits under combined loading cases.")
-
-# --- SIDEBAR: Documentation ---
-@st.dialog("📖 Technical Documentation", width="large")
-def show_documentation():
-    st.markdown(r"""
-### Introduction
-This program implements an advanced, highly modular **3D Finite Element Analysis (FEA) Solver** specifically designed for representing, simulating, and evaluating spatial structural frames using 3D linear beam elements.
-
-Equipped with support for elastic material bounds and customized cross-sectional profile calculations (circular hollow tube structure), the engine is capable of computing structural nodal displacements, internal forces, torsional shearing stresses, and yielding metrics under arbitrary point loading forces.
-
-**6 Degrees of Freedom**
-Evaluates translation and rotational displacements simultaneously for every node in local and global spatial axes.
-
-**Structural Hotspotting**
-Post-processes combined loading stress tensors to calculate Von Mises equivalent stress mapped to 3D tube geometries.
-
----
-
-### Mathematical Formulations
-The mathematical pipeline utilizes Euler-Bernoulli linear bending mechanics combined with St. Venant torsional formulations. Transverse shear and axial tension stiffness properties are aggregated into a $12 \times 12$ element stiffness matrix $K^e_{local}$ in the local coordinate systems.
-
-**Governing Nodal Equilibrium Equation**
-$$f_{local} = K^e_{local} \cdot u_{local}$$
-
-To transition elements from arbitrary orientations in 3D space to the global system, direction cosines are used to construct an orthonormal coordinate rotation matrix $R_{3\times 3}$. The global element stiffness matrix is derived via: 
-
-**Orthogonal Coordinate Transformation**
-$$K^e_{global} = T^T \cdot K^e_{local} \cdot T$$
-
-Where $T$ is the $12\times 12$ kinematic transformation matrix composed of the direction cosines rotation matrix block-diagonally.
-
-#### Von Mises Equivalent Stress
-During the post-processing phase, the stress state at extreme fibers is calculated by combining axial force $F_x$, torsion $M_x$, and bending moments $M_y$, $M_z$. The normal stress $\sigma_x$ and shearing stress $\tau_{torsion}$ are computed as:
-
-**Combined Axial and Biaxial Bending Normal Stress**
-$$\sigma_x = \frac{F_x}{A} - \frac{M_z \cdot y}{I_z} + \frac{M_y \cdot z}{I_y}$$
-
-**Torsional Shearing Stress Formula**
-$$\tau_{torsion} = \frac{M_x \cdot r_{outer}}{J}$$
-
-Finally, these are reduced into the uni-axial equivalent **Von Mises Stress** at the critical cross-sectional outer points:
-
-**Von Mises Equivalent Yield Condition**
-$$\sigma_{VM} = \sqrt{\sigma_x^2 + 3 \tau_{torsion}^2}$$
-
----
-
-### Code Architecture
-The code is designed to be lean, performant, and self-contained within `main.py`. The structural execution workflow is separated into 5 clear pipelines:
-
-**1. Pre-Processing & Geometry Setup**
-Defining nodes, connectivity arrays, hollow tube radius bounds, and isotropic material variables (Elastic modulus & Poisson ratio).
-
-**2. Local Element Stiffness Formulations**
-The function `calculate_element_stiffness_matrix_3d_beam` evaluates the structural resistances based on length $L$, cross-section area $A$, moments of inertia $I_y, I_z$, and polar moment of inertia $J$.
-
-**3. Assembly of Global System Equations**
-Degrees of Freedom (DOFs) are mapped to global indices, and the element matrices are summed into the global stiffness matrix $K_{global}$ ($N_{nodes} \times 6$).
-
-**4. Boundary Enforcement and Solving**
-Fixed supports are applied via penalty or partition boundaries (zeroing rows/columns and setting diagonal elements to 1). The displacement vector $U$ is solved via `scipy.linalg.solve`.
-
-**5. Stress Post-Processing and 3D Volumetric Tube Visualization**
-Nodal translations are mapped to elements. Element cylinder vertices are created in 3D, colored based on Von Mises output, and plotted utilizing matplotlib's `Poly3DCollection`.
-""")
-
-if st.sidebar.button("📖 View Technical Documentation", use_container_width=True):
-    show_documentation()
-
-# --- SIDEBAR: Configuration Panel ---
-st.sidebar.header("⚙️ Design Configuration")
-
-# Material presets
-st.sidebar.subheader("💎 Material Selection")
-material_preset = st.sidebar.selectbox(
-    "Choose Material Preset",
-    ["Structural Steel", "Aluminum 6061-T6", "Titanium Grade 5", "Custom Isotropic"]
-)
-
-# Setup material constants based on selection
-if material_preset == "Structural Steel":
-    youngs_modulus = 200e9
-    poissons_ratio = 0.27
-    yield_strength = 250e6  # Pa
-elif material_preset == "Aluminum 6061-T6":
-    youngs_modulus = 68.9e9
-    poissons_ratio = 0.33
-    yield_strength = 276e6  # Pa
-elif material_preset == "Titanium Grade 5":
-    youngs_modulus = 114e9
-    poissons_ratio = 0.34
-    yield_strength = 880e6  # Pa
-else:
-    youngs_modulus = st.sidebar.number_input("Young's Modulus (E) in GPa", min_value=1.0, max_value=1000.0, value=200.0) * 1e9
-    poissons_ratio = st.sidebar.slider("Poisson's Ratio (ν)", 0.0, 0.49, 0.27)
-    yield_strength = st.sidebar.number_input("Yield Strength in MPa", min_value=10.0, max_value=5000.0, value=250.0) * 1e6
-
-# Geometry Configuration
-st.sidebar.subheader("📐 Beam Geometry (Hollow Tube)")
-outer_radius = st.sidebar.slider("Outer Radius (m)", 0.02, 0.50, 0.10, step=0.01)
-inner_radius = st.sidebar.slider("Inner Radius (m)", 0.01, outer_radius - 0.01, 0.08, step=0.01)
-beam_length = st.sidebar.slider("Total Beam Length (m)", 0.5, 10.0, 2.0, step=0.1)
-num_elements = st.sidebar.slider("Number of Finite Elements", 1, 10, 2, step=1)
-
-# Combined Loadings Configuration
-st.sidebar.subheader("⚡ Tip Load Conditions (Node Tip)")
-fx_load = st.sidebar.number_input("Axial Force Fx (N) [+ Tension]", value=0.0)
-fy_load = st.sidebar.number_input("Transverse Shear Force Fy (N) [Vertical]", value=-1000.0)
-fz_load = st.sidebar.number_input("Transverse Shear Force Fz (N) [Lateral]", value=0.0)
-mx_load = st.sidebar.number_input("Torsional Moment Mx (N-m)", value=0.0)
-
-# Vis Settings
-st.sidebar.subheader("🎨 Visual Scaling")
-scale_factor = st.sidebar.slider("Deflection Display Scale Factor (x)", 1.0, 500.0, 50.0)
-
-# --- 1. Math Precomputation ---
-A = np.pi * (outer_radius**2 - inner_radius**2)
-Iy = np.pi / 4 * (outer_radius**4 - inner_radius**4)
-Iz = Iy
-J = 2 * Iy
-
-cross_section_properties = {
-    "Area": A, "Iy": Iy, "Iz": Iz, "J": J,
-    "outer_radius": outer_radius, "inner_radius": inner_radius
-}
-
-material_properties = {
-    "youngs_modulus": youngs_modulus,
-    "poissons_ratio": poissons_ratio
-}
-
-# --- 2. Build 3D Mesh ---
-x_coords = np.linspace(0.0, beam_length, num_elements + 1)
-nodes_3d = np.zeros((num_elements + 1, 3))
-nodes_3d[:, 0] = x_coords  # Straight horizontal along X-axis
-
-elements_3d = []
-for i in range(num_elements):
-    elements_3d.append([i, i + 1])
-elements_3d = np.array(elements_3d)
-
-# --- 3. Stiffness Matrix Calculator ---
+# --- MATH FUNCTIONS ---
 def calculate_element_stiffness_matrix_3d_beam(node1, node2, mat, cs):
     E = mat['youngs_modulus']
     G = E / (2 * (1 + mat['poissons_ratio']))
@@ -214,34 +38,6 @@ def calculate_element_stiffness_matrix_3d_beam(node1, node2, mat, cs):
     Ke_local[4,8] = Ke_local[8,4] = Ke_local[8,10] = Ke_local[10,8] = by2
     return Ke_local
 
-# --- 4. Global System Assembly & Solution ---
-num_nodes = len(nodes_3d)
-K = np.zeros((num_nodes*6, num_nodes*6))
-F = np.zeros(num_nodes*6)
-
-# Apply forces at the very tip (last node)
-tip_node_idx = num_nodes - 1
-F[tip_node_idx*6 + 0] = fx_load
-F[tip_node_idx*6 + 1] = fy_load
-F[tip_node_idx*6 + 2] = fz_load
-F[tip_node_idx*6 + 3] = mx_load
-
-for idx, (n1, n2) in enumerate(elements_3d):
-    Ke = calculate_element_stiffness_matrix_3d_beam(nodes_3d[n1], nodes_3d[n2], material_properties, cross_section_properties)
-    dofs = np.concatenate([np.arange(n1*6, n1*6+6), np.arange(n2*6, n2*6+6)])
-    for i in range(12):
-        for j in range(12):
-            K[dofs[i], dofs[j]] += Ke[i, j]
-
-# Fix boundary condition (Fully fixed Node 0 support)
-fixed_dofs = np.arange(0, 6)
-for dof in fixed_dofs:
-    K[dof, :] = 0; K[:, dof] = 0; K[dof, dof] = 1; F[dof] = 0
-
-# Solver execution
-U = solve(K, F)
-
-# --- 5. Stress Post-Processing ---
 def calculate_element_results_3d_beam(node1_coords_global, node2_coords_global, element_global_indices, nodal_displacements, mat, cs):
     E = mat['youngs_modulus']
     nu = mat['poissons_ratio']
@@ -285,17 +81,13 @@ def calculate_element_results_3d_beam(node1_coords_global, node2_coords_global, 
 
     # Re-calculate local element forces
     Ke_local = np.zeros((12, 12))
-    # Axial
     Ke_local[0,0] = Ke_local[6,6] = E*A/L; Ke_local[0,6] = Ke_local[6,0] = -E*A/L
-    # Torsion
     Ke_local[3,3] = Ke_local[9,9] = G*J/L; Ke_local[3,9] = Ke_local[9,3] = -G*J/L
-    # Bending Z
     bz1, bz2, bz3, bz4 = 12*E*Iz/L**3, 6*E*Iz/L**2, 4*E*Iz/L, 2*E*Iz/L
     Ke_local[1,1] = Ke_local[7,7] = bz1; Ke_local[1,7] = Ke_local[7,1] = -bz1
     Ke_local[1,5] = Ke_local[5,1] = Ke_local[1,11] = Ke_local[11,1] = bz2
     Ke_local[5,5] = Ke_local[11,11] = bz3; Ke_local[5,11] = Ke_local[11,5] = bz4
     Ke_local[5,7] = Ke_local[7,5] = Ke_local[7,11] = Ke_local[11,7] = -bz2
-    # Bending Y
     by1, by2, by3, by4 = 12*E*Iy/L**3, 6*E*Iy/L**2, 4*E*Iy/L, 2*E*Iy/L
     Ke_local[2,2] = Ke_local[8,8] = by1; Ke_local[2,8] = Ke_local[8,2] = -by1
     Ke_local[2,4] = Ke_local[4,2] = Ke_local[2,10] = Ke_local[10,2] = -by2
@@ -304,13 +96,11 @@ def calculate_element_results_3d_beam(node1_coords_global, node2_coords_global, 
 
     f_local = Ke_local @ u_local
 
-    # Max stress evaluated at node endpoints
     Fx2 = f_local[6]
     Mx2 = f_local[9]
     My2 = f_local[10]
     Mz2 = f_local[11]
 
-    # Stresses evaluated at 4 outer cross-sectional points
     vm_list = []
     points = [[ro, 0.0], [-ro, 0.0], [0.0, ro], [0.0, -ro]]
     for yp, zp in points:
@@ -318,9 +108,7 @@ def calculate_element_results_3d_beam(node1_coords_global, node2_coords_global, 
         sigma_bending_z = (-Mz2 * yp) / Iz
         sigma_bending_y = (My2 * zp) / Iy
         sigma_normal = sigma_axial + sigma_bending_z + sigma_bending_y
-        
         tau_torsion = (np.abs(Mx2) * ro) / J
-        
         von_mises = np.sqrt(sigma_normal**2 + 3 * tau_torsion**2)
         vm_list.append(von_mises)
 
@@ -335,194 +123,433 @@ def calculate_element_results_3d_beam(node1_coords_global, node2_coords_global, 
         }
     }
 
-element_results = {}
-max_model_stress = 0.0
-for element_idx, element_indices in enumerate(elements_3d):
-    res = calculate_element_results_3d_beam(
-        nodes_3d[element_indices[0]], nodes_3d[element_indices[1]],
-        element_indices, U, material_properties, cross_section_properties
-    )
-    element_results[element_idx] = res
-    if res['von_mises_stresses']['max'] > max_model_stress:
-        max_model_stress = res['von_mises_stresses']['max']
+# --- DOCUMENTATION ---
+DOC_TEXTS = {
+    "Welcome": "Welcome to the 3D FEA Engine!\n\nHover over any configuration panel on the left to see its documentation here.",
+    "Material": "### Material Selection\nDefines the isotropic material properties of the structure.\n\nE: Young's Modulus (stiffness).\nν: Poisson's Ratio (lateral strain).\nYield Strength: Material's limit before plastic deformation.\n\nPresets load values automatically, or choose 'Custom Isotropic' to enter your own.",
+    "Geometry": "### Beam Geometry\nConfigures the physical dimensions of the spatial hollow tube elements.\n\nOuter/Inner Radius: Dictates the cross-sectional area and moments of inertia. Ensure Outer Radius > Inner Radius.\n\nLength: Total horizontal span of the beam.\nElements: Number of finite elements the beam is discretized into for higher resolution.",
+    "Loads": "### Tip Load Conditions\nDefines the external forces and moments applied at the tip node (the free right end).\n\nFx: Axial Force (Tension/Compression)\nFy: Transverse Shear (Vertical)\nFz: Transverse Shear (Lateral/Depth)\nMx: Torsional Moment around the X-axis",
+    "Scale": "### Deflection Scale\nA visual multiplier applied only to the 3D plot to exaggerate structural bending for easier visual inspection. This does not change the actual computed displacements.",
+    "Results": "### Stress & Displacement Results\nDisplays the calculated 6-DOF nodal displacements and element internal forces.\n\nThe Von Mises Stress determines structural safety based on combined axial, bending, and torsional loads."
+}
 
-# --- 6. Results Dashboard Metrics ---
-col1, col2, col3 = st.columns(3)
-
-# Calculated metrics
-tip_dx = U[tip_node_idx*6 + 0]
-tip_dy = U[tip_node_idx*6 + 1]
-tip_dz = U[tip_node_idx*6 + 2]
-total_deflection = np.sqrt(tip_dx**2 + tip_dy**2 + tip_dz**2)
-
-safety_factor = yield_strength / max_model_stress if max_model_stress > 1e-3 else 999.0
-
-with col1:
-    st.markdown(f"""
-    <div class="metric-card">
-        <div class="metric-title">💡 Total Tip Deflection</div>
-        <div class="metric-val">{total_deflection * 1e3:.4f} mm</div>
-    </div>
-    """, unsafe_allow_html=True)
-
-with col2:
-    st.markdown(f"""
-    <div class="metric-card">
-        <div class="metric-title">🔥 Max Von Mises Stress</div>
-        <div class="metric-val">{max_model_stress / 1e6:.3f} MPa</div>
-    </div>
-    """, unsafe_allow_html=True)
-
-with col3:
-    status_color = "#22c55e" if safety_factor >= 1.5 else ("#eab308" if safety_factor >= 1.0 else "#ef4444")
-    st.markdown(f"""
-    <div class="metric-card">
-        <div class="metric-title">🛡️ Safety Factor</div>
-        <div class="metric-val" style="color: {status_color}">{safety_factor:.2f}</div>
-    </div>
-    """, unsafe_allow_html=True)
-
-# Safety indicator warning
-if safety_factor < 1.0:
-    st.error(f"⚠️ STRUCTURAL FAILURE DETECTED: The structural elements have exceeded the material's yield strength ({yield_strength/1e6:.1f} MPa) by a factor of {1.0/safety_factor:.2f}x!")
-elif safety_factor < 1.5:
-    st.warning("⚠️ CRITICAL MARGIN: The factor of safety is below standard structural design guidelines (FoS < 1.5). Consider increasing section radii.")
-else:
-    st.success("✅ STRUCTURAL STABILITY SECURE: All spatial members satisfy the designated material factor of safety margins.")
-
-# --- 7. Plotting Section ---
-st.subheader("📊 3D Stress Mapping & Volumetric Deflection Plot")
-st.markdown("Cylindrical tube mesh visualization displaying stress intensity gradient along the spatial model. Displacements are scaled for visual highlight.")
-
-fig = plt.figure(figsize=(10, 8))
-ax = fig.add_subplot(111, projection='3d')
-
-# Setup equal axes layout boundaries
-max_range = max(beam_length * 0.6, 0.5)
-mid_x = beam_length * 0.5
-ax.set_xlim(mid_x - max_range, mid_x + max_range)
-ax.set_ylim(-max_range, max_range)
-ax.set_zlim(-max_range, max_range)
-
-# Form deformed coordinates
-displacements_reshaped = U.reshape(-1, 6)
-deformed_nodes = nodes_3d + displacements_reshaped[:, :3] * scale_factor
-
-# Mappings & Colormap configurations
-all_stresses = [res['von_mises_stresses']['max'] for res in element_results.values()]
-norm = plt.Normalize(min(all_stresses) - 1e3, max(all_stresses) + 1e3) if max(all_stresses) - min(all_stresses) < 1e-3 else plt.Normalize(min(all_stresses), max(all_stresses))
-cmap = plt.cm.jet
-
-resolution = 12
-
-for i, (n1, n2) in enumerate(elements_3d):
-    pt1 = deformed_nodes[n1]
-    pt2 = deformed_nodes[n2]
-    
-    color = cmap(norm(all_stresses[i]))
-    vector = pt2 - pt1
-    mag = np.linalg.norm(vector)
-    if mag < 1e-9: continue
-    
-    vector_norm = vector / mag
-    
-    # Cylindrical generator
-    if np.isclose(np.abs(vector_norm[2]), 1.0):
-        v1 = np.array([1.0, 0.0, 0.0])
-    else:
-        v1 = np.array([0.0, 0.0, 1.0])
+# --- GUI APP ---
+class FEAEngineApp(ctk.CTk):
+    def __init__(self):
+        super().__init__()
         
-    v1 = v1 - np.dot(v1, vector_norm) * vector_norm
-    v1 = v1 / np.linalg.norm(v1)
-    v2 = np.cross(vector_norm, v1)
-    
-    theta = np.linspace(0, 2*np.pi, resolution)
-    circle_outer = outer_radius * (np.outer(np.cos(theta), v1) + np.outer(np.sin(theta), v2))
-    circle_inner = inner_radius * (np.outer(np.cos(theta), v1) + np.outer(np.sin(theta), v2))
-    
-    verts_outer = []
-    for j in range(resolution - 1):
-        verts_outer.append([
-            pt1 + circle_outer[j, :],
-            pt1 + circle_outer[j+1, :],
-            pt2 + circle_outer[j+1, :],
-            pt2 + circle_outer[j, :]
-        ])
-    verts_outer.append([
-        pt1 + circle_outer[resolution-1, :],
-        pt1 + circle_outer[0, :],
-        pt2 + circle_outer[0, :],
-        pt2 + circle_outer[resolution-1, :]
-    ])
-    ax.add_collection3d(Poly3DCollection(verts_outer, facecolor=color, edgecolor='k', linewidths=0.15, alpha=0.9))
+        self.title("3D Beam FEA Engine")
+        self.geometry("1600x900")
+        
+        # Grid config
+        self.grid_columnconfigure(1, weight=1)
+        self.grid_rowconfigure(0, weight=1)
+        
+        # State variables
+        self.fig = None
+        self.canvas = None
+        
+        self.setup_left_panel()
+        self.setup_mid_panel()
+        self.setup_right_panel()
+        
+        self.update_doc("Welcome")
+        self.run_analysis()
 
-    if inner_radius > 0:
-        verts_inner = []
-        for j in range(resolution - 1):
-            verts_inner.append([
-                pt1 + circle_inner[j, :],
-                pt1 + circle_inner[j+1, :],
-                pt2 + circle_inner[j+1, :],
-                pt2 + circle_inner[j, :]
+    def update_doc(self, key):
+        self.doc_textbox.configure(state="normal")
+        self.doc_textbox.delete("0.0", "end")
+        self.doc_textbox.insert("0.0", DOC_TEXTS.get(key, ""))
+        self.doc_textbox.configure(state="disabled")
+
+    def on_material_change(self, choice):
+        if choice == "Structural Steel":
+            self.e_var.set(200.0)
+            self.pr_var.set(0.27)
+            self.yield_var.set(250.0)
+            self._set_mat_state("disabled")
+        elif choice == "Aluminum 6061-T6":
+            self.e_var.set(68.9)
+            self.pr_var.set(0.33)
+            self.yield_var.set(276.0)
+            self._set_mat_state("disabled")
+        elif choice == "Titanium Grade 5":
+            self.e_var.set(114.0)
+            self.pr_var.set(0.34)
+            self.yield_var.set(880.0)
+            self._set_mat_state("disabled")
+        else:
+            self._set_mat_state("normal")
+            
+    def _set_mat_state(self, state):
+        self.e_entry.configure(state=state)
+        self.pr_entry.configure(state=state)
+        self.yield_entry.configure(state=state)
+
+    def setup_left_panel(self):
+        self.left_panel = ctk.CTkFrame(self, width=320, corner_radius=0)
+        self.left_panel.grid(row=0, column=0, sticky="nsew")
+        self.left_panel.grid_rowconfigure(10, weight=1)
+        
+        ctk.CTkLabel(self.left_panel, text="⚙️ Configuration", font=ctk.CTkFont(size=20, weight="bold")).grid(row=0, column=0, padx=20, pady=(20, 10))
+        
+        # Material
+        ctk.CTkLabel(self.left_panel, text="💎 Material Selection", anchor="w").grid(row=1, column=0, padx=20, pady=(10, 0), sticky="w")
+        self.material_var = ctk.StringVar(value="Structural Steel")
+        self.material_dropdown = ctk.CTkComboBox(self.left_panel, variable=self.material_var, values=["Structural Steel", "Aluminum 6061-T6", "Titanium Grade 5", "Custom Isotropic"], command=self.on_material_change)
+        self.material_dropdown.grid(row=2, column=0, padx=20, pady=(5, 10), sticky="ew")
+        
+        self.e_var = ctk.DoubleVar(value=200.0)
+        self.pr_var = ctk.DoubleVar(value=0.27)
+        self.yield_var = ctk.DoubleVar(value=250.0)
+        
+        self.mat_frame = ctk.CTkFrame(self.left_panel, fg_color="transparent")
+        self.mat_frame.grid(row=3, column=0, padx=20, sticky="ew")
+        self.mat_frame.columnconfigure(1, weight=1)
+        
+        ctk.CTkLabel(self.mat_frame, text="E (GPa):").grid(row=0, column=0, sticky="w")
+        self.e_entry = ctk.CTkEntry(self.mat_frame, textvariable=self.e_var, state="disabled", width=80)
+        self.e_entry.grid(row=0, column=1, sticky="e")
+        
+        ctk.CTkLabel(self.mat_frame, text="Poisson's:").grid(row=1, column=0, sticky="w")
+        self.pr_entry = ctk.CTkEntry(self.mat_frame, textvariable=self.pr_var, state="disabled", width=80)
+        self.pr_entry.grid(row=1, column=1, sticky="e")
+        
+        ctk.CTkLabel(self.mat_frame, text="Yield (MPa):").grid(row=2, column=0, sticky="w")
+        self.yield_entry = ctk.CTkEntry(self.mat_frame, textvariable=self.yield_var, state="disabled", width=80)
+        self.yield_entry.grid(row=2, column=1, sticky="e")
+        
+        self.material_dropdown.bind("<Enter>", lambda e: self.update_doc("Material"))
+        self.mat_frame.bind("<Enter>", lambda e: self.update_doc("Material"))
+        
+        # Geometry
+        ctk.CTkLabel(self.left_panel, text="📐 Beam Geometry", anchor="w").grid(row=4, column=0, padx=20, pady=(20, 0), sticky="w")
+        
+        self.geom_frame = ctk.CTkFrame(self.left_panel, fg_color="transparent")
+        self.geom_frame.grid(row=5, column=0, padx=20, sticky="ew")
+        self.geom_frame.bind("<Enter>", lambda e: self.update_doc("Geometry"))
+        self.geom_frame.columnconfigure(1, weight=1)
+        
+        ctk.CTkLabel(self.geom_frame, text="Outer Rad (m):").grid(row=0, column=0, sticky="w", pady=(0,10))
+        self.or_var = ctk.DoubleVar(value=0.10)
+        self.or_slider = ctk.CTkSlider(self.geom_frame, variable=self.or_var, from_=0.02, to=0.50)
+        self.or_slider.grid(row=0, column=1, sticky="e", pady=(0,10))
+        
+        ctk.CTkLabel(self.geom_frame, text="Inner Rad (m):").grid(row=1, column=0, sticky="w", pady=(0,10))
+        self.ir_var = ctk.DoubleVar(value=0.08)
+        self.ir_slider = ctk.CTkSlider(self.geom_frame, variable=self.ir_var, from_=0.01, to=0.49)
+        self.ir_slider.grid(row=1, column=1, sticky="e", pady=(0,10))
+        
+        ctk.CTkLabel(self.geom_frame, text="Length (m):").grid(row=2, column=0, sticky="w", pady=(0,10))
+        self.len_var = ctk.DoubleVar(value=2.0)
+        self.len_slider = ctk.CTkSlider(self.geom_frame, variable=self.len_var, from_=0.5, to=10.0)
+        self.len_slider.grid(row=2, column=1, sticky="e", pady=(0,10))
+        
+        ctk.CTkLabel(self.geom_frame, text="Elements:").grid(row=3, column=0, sticky="w")
+        self.el_var = ctk.IntVar(value=2)
+        self.el_slider = ctk.CTkSlider(self.geom_frame, variable=self.el_var, from_=1, to=10, number_of_steps=9)
+        self.el_slider.grid(row=3, column=1, sticky="e")
+        
+        # Loads
+        ctk.CTkLabel(self.left_panel, text="⚡ Tip Load Conditions", anchor="w").grid(row=6, column=0, padx=20, pady=(20, 0), sticky="w")
+        self.loads_frame = ctk.CTkFrame(self.left_panel, fg_color="transparent")
+        self.loads_frame.grid(row=7, column=0, padx=20, sticky="ew")
+        self.loads_frame.columnconfigure(1, weight=1)
+        self.loads_frame.bind("<Enter>", lambda e: self.update_doc("Loads"))
+        
+        ctk.CTkLabel(self.loads_frame, text="Fx (N):").grid(row=0, column=0, sticky="w")
+        self.fx_var = ctk.DoubleVar(value=0.0)
+        ctk.CTkEntry(self.loads_frame, textvariable=self.fx_var, width=80).grid(row=0, column=1, sticky="e", pady=2)
+        
+        ctk.CTkLabel(self.loads_frame, text="Fy (N):").grid(row=1, column=0, sticky="w")
+        self.fy_var = ctk.DoubleVar(value=-1000.0)
+        ctk.CTkEntry(self.loads_frame, textvariable=self.fy_var, width=80).grid(row=1, column=1, sticky="e", pady=2)
+        
+        ctk.CTkLabel(self.loads_frame, text="Fz (N):").grid(row=2, column=0, sticky="w")
+        self.fz_var = ctk.DoubleVar(value=0.0)
+        ctk.CTkEntry(self.loads_frame, textvariable=self.fz_var, width=80).grid(row=2, column=1, sticky="e", pady=2)
+        
+        ctk.CTkLabel(self.loads_frame, text="Mx (N-m):").grid(row=3, column=0, sticky="w")
+        self.mx_var = ctk.DoubleVar(value=0.0)
+        ctk.CTkEntry(self.loads_frame, textvariable=self.mx_var, width=80).grid(row=3, column=1, sticky="e", pady=2)
+        
+        # Scale
+        scale_label = ctk.CTkLabel(self.left_panel, text="🎨 Deflection Scale")
+        scale_label.grid(row=8, column=0, padx=20, pady=(20, 0), sticky="w")
+        scale_label.bind("<Enter>", lambda e: self.update_doc("Scale"))
+        self.scale_var = ctk.DoubleVar(value=50.0)
+        self.scale_slider = ctk.CTkSlider(self.left_panel, variable=self.scale_var, from_=1.0, to=500.0)
+        self.scale_slider.grid(row=9, column=0, padx=20, sticky="ew")
+        self.scale_slider.bind("<Enter>", lambda e: self.update_doc("Scale"))
+        
+        # Button
+        self.run_btn = ctk.CTkButton(self.left_panel, text="Run Analysis", command=self.run_analysis)
+        self.run_btn.grid(row=11, column=0, padx=20, pady=20, sticky="ew")
+        
+    def setup_mid_panel(self):
+        self.mid_panel = ctk.CTkFrame(self, corner_radius=0, fg_color="transparent")
+        self.mid_panel.grid(row=0, column=1, sticky="nsew", padx=10, pady=10)
+        self.mid_panel.grid_rowconfigure(1, weight=1)
+        self.mid_panel.grid_columnconfigure(0, weight=1)
+        
+        # Metrics Top bar
+        self.metrics_frame = ctk.CTkFrame(self.mid_panel, fg_color="transparent")
+        self.metrics_frame.grid(row=0, column=0, sticky="ew", pady=(0, 10))
+        self.metrics_frame.grid_columnconfigure((0,1,2), weight=1)
+        
+        # Metric Cards
+        self.m1 = ctk.CTkFrame(self.metrics_frame, corner_radius=8, fg_color="#1e2942")
+        self.m1.grid(row=0, column=0, sticky="ew", padx=5)
+        ctk.CTkLabel(self.m1, text="💡 Total Tip Deflection", text_color="#9ca3af").pack(pady=(10, 0))
+        self.deflection_lbl = ctk.CTkLabel(self.m1, text="0.000 mm", font=ctk.CTkFont(size=24, weight="bold"), text_color="#06b6d4")
+        self.deflection_lbl.pack(pady=(0, 10))
+        
+        self.m2 = ctk.CTkFrame(self.metrics_frame, corner_radius=8, fg_color="#1e2942")
+        self.m2.grid(row=0, column=1, sticky="ew", padx=5)
+        ctk.CTkLabel(self.m2, text="🔥 Max Von Mises Stress", text_color="#9ca3af").pack(pady=(10, 0))
+        self.stress_lbl = ctk.CTkLabel(self.m2, text="0.000 MPa", font=ctk.CTkFont(size=24, weight="bold"), text_color="#06b6d4")
+        self.stress_lbl.pack(pady=(0, 10))
+        
+        self.m3 = ctk.CTkFrame(self.metrics_frame, corner_radius=8, fg_color="#1e2942")
+        self.m3.grid(row=0, column=2, sticky="ew", padx=5)
+        ctk.CTkLabel(self.m3, text="🛡️ Safety Factor", text_color="#9ca3af").pack(pady=(10, 0))
+        self.sf_lbl = ctk.CTkLabel(self.m3, text="0.00", font=ctk.CTkFont(size=24, weight="bold"))
+        self.sf_lbl.pack(pady=(0, 10))
+        
+        # Plot Frame
+        self.plot_frame = ctk.CTkFrame(self.mid_panel, corner_radius=8)
+        self.plot_frame.grid(row=1, column=0, sticky="nsew", pady=(0, 10))
+        
+        # Table Tabs
+        self.tabview = ctk.CTkTabview(self.mid_panel, height=250)
+        self.tabview.grid(row=2, column=0, sticky="ew")
+        self.tabview.add("Nodal Displacements")
+        self.tabview.add("Element Internal Forces")
+        
+        # Use treeviews for data
+        style = ttk.Style()
+        style.theme_use("default")
+        style.configure("Treeview", background="#2b2b2b", foreground="white", fieldbackground="#2b2b2b", borderwidth=0)
+        style.map('Treeview', background=[('selected', '#1f538d')])
+        
+        self.node_tree = ttk.Treeview(self.tabview.tab("Nodal Displacements"), columns=("ID", "DX", "DY", "DZ", "RX", "RY", "RZ"), show="headings")
+        self.node_tree.heading("ID", text="Node ID")
+        self.node_tree.heading("DX", text="Disp X (mm)")
+        self.node_tree.heading("DY", text="Disp Y (mm)")
+        self.node_tree.heading("DZ", text="Disp Z (mm)")
+        self.node_tree.heading("RX", text="Rot X (mrad)")
+        self.node_tree.heading("RY", text="Rot Y (mrad)")
+        self.node_tree.heading("RZ", text="Rot Z (mrad)")
+        self.node_tree.pack(fill="both", expand=True)
+        
+        self.elem_tree = ttk.Treeview(self.tabview.tab("Element Internal Forces"), columns=("ID", "Conn", "Fx", "Mx", "My", "Mz", "VM"), show="headings")
+        self.elem_tree.heading("ID", text="Element ID")
+        self.elem_tree.heading("Conn", text="Connectivity")
+        self.elem_tree.heading("Fx", text="Axial Fx (N)")
+        self.elem_tree.heading("Mx", text="Torsion Mx (N-m)")
+        self.elem_tree.heading("My", text="Bending My (N-m)")
+        self.elem_tree.heading("Mz", text="Bending Mz (N-m)")
+        self.elem_tree.heading("VM", text="Max Von Mises (MPa)")
+        self.elem_tree.pack(fill="both", expand=True)
+
+    def setup_right_panel(self):
+        self.right_panel = ctk.CTkFrame(self, width=350, corner_radius=0, fg_color="#1a1a1a")
+        self.right_panel.grid(row=0, column=2, sticky="nsew")
+        self.right_panel.grid_rowconfigure(1, weight=1)
+        self.right_panel.grid_columnconfigure(0, weight=1)
+        
+        ctk.CTkLabel(self.right_panel, text="📖 Documentation", font=ctk.CTkFont(size=20, weight="bold")).grid(row=0, column=0, padx=20, pady=(20, 10), sticky="w")
+        
+        self.doc_textbox = ctk.CTkTextbox(self.right_panel, wrap="word", corner_radius=8, fg_color="#242424")
+        self.doc_textbox.grid(row=1, column=0, padx=20, pady=(0, 20), sticky="nsew")
+        self.doc_textbox.insert("0.0", "Welcome to the FEA Engine.")
+        self.doc_textbox.configure(state="disabled")
+
+    def run_analysis(self):
+        # 1. Gather properties
+        youngs_modulus = self.e_var.get() * 1e9
+        poissons_ratio = self.pr_var.get()
+        yield_strength = self.yield_var.get() * 1e6
+        
+        outer_radius = self.or_var.get()
+        inner_radius = self.ir_var.get()
+        if inner_radius >= outer_radius:
+            inner_radius = outer_radius - 0.001
+            self.ir_var.set(inner_radius)
+            
+        beam_length = self.len_var.get()
+        num_elements = self.el_var.get()
+        
+        fx_load = self.fx_var.get()
+        fy_load = self.fy_var.get()
+        fz_load = self.fz_var.get()
+        mx_load = self.mx_var.get()
+        scale_factor = self.scale_var.get()
+        
+        A = np.pi * (outer_radius**2 - inner_radius**2)
+        Iy = np.pi / 4 * (outer_radius**4 - inner_radius**4)
+        Iz = Iy
+        J = 2 * Iy
+        
+        cross_section_properties = {
+            "Area": A, "Iy": Iy, "Iz": Iz, "J": J,
+            "outer_radius": outer_radius, "inner_radius": inner_radius
+        }
+        material_properties = {
+            "youngs_modulus": youngs_modulus,
+            "poissons_ratio": poissons_ratio
+        }
+        
+        # 2. Build 3D Mesh
+        x_coords = np.linspace(0.0, beam_length, num_elements + 1)
+        nodes_3d = np.zeros((num_elements + 1, 3))
+        nodes_3d[:, 0] = x_coords
+        
+        elements_3d = []
+        for i in range(num_elements):
+            elements_3d.append([i, i + 1])
+        elements_3d = np.array(elements_3d)
+        
+        # 3. Global System Assembly & Solution
+        num_nodes = len(nodes_3d)
+        K = np.zeros((num_nodes*6, num_nodes*6))
+        F = np.zeros(num_nodes*6)
+        
+        tip_node_idx = num_nodes - 1
+        F[tip_node_idx*6 + 0] = fx_load
+        F[tip_node_idx*6 + 1] = fy_load
+        F[tip_node_idx*6 + 2] = fz_load
+        F[tip_node_idx*6 + 3] = mx_load
+        
+        for idx, (n1, n2) in enumerate(elements_3d):
+            Ke = calculate_element_stiffness_matrix_3d_beam(nodes_3d[n1], nodes_3d[n2], material_properties, cross_section_properties)
+            dofs = np.concatenate([np.arange(n1*6, n1*6+6), np.arange(n2*6, n2*6+6)])
+            for i in range(12):
+                for j in range(12):
+                    K[dofs[i], dofs[j]] += Ke[i, j]
+                    
+        fixed_dofs = np.arange(0, 6)
+        for dof in fixed_dofs:
+            K[dof, :] = 0; K[:, dof] = 0; K[dof, dof] = 1; F[dof] = 0
+            
+        U = solve(K, F)
+        
+        # 4. Stress Post-Processing
+        element_results = {}
+        max_model_stress = 0.0
+        for element_idx, element_indices in enumerate(elements_3d):
+            res = calculate_element_results_3d_beam(
+                nodes_3d[element_indices[0]], nodes_3d[element_indices[1]],
+                element_indices, U, material_properties, cross_section_properties
+            )
+            element_results[element_idx] = res
+            if res['von_mises_stresses']['max'] > max_model_stress:
+                max_model_stress = res['von_mises_stresses']['max']
+                
+        # 5. Dashboard Metrics Update
+        tip_dx = U[tip_node_idx*6 + 0]
+        tip_dy = U[tip_node_idx*6 + 1]
+        tip_dz = U[tip_node_idx*6 + 2]
+        total_deflection = np.sqrt(tip_dx**2 + tip_dy**2 + tip_dz**2)
+        
+        safety_factor = yield_strength / max_model_stress if max_model_stress > 1e-3 else 999.0
+        
+        self.deflection_lbl.configure(text=f"{total_deflection * 1e3:.4f} mm")
+        self.stress_lbl.configure(text=f"{max_model_stress / 1e6:.3f} MPa")
+        self.sf_lbl.configure(text=f"{safety_factor:.2f}")
+        if safety_factor >= 1.5:
+            self.sf_lbl.configure(text_color="#22c55e")
+        elif safety_factor >= 1.0:
+            self.sf_lbl.configure(text_color="#eab308")
+        else:
+            self.sf_lbl.configure(text_color="#ef4444")
+            
+        # Update Tables
+        for row in self.node_tree.get_children():
+            self.node_tree.delete(row)
+        for i in range(num_nodes):
+            nd = U[i*6:(i+1)*6]
+            self.node_tree.insert("", "end", values=(i, f"{nd[0]*1e3:.4f}", f"{nd[1]*1e3:.4f}", f"{nd[2]*1e3:.4f}", f"{nd[3]*1e3:.4f}", f"{nd[4]*1e3:.4f}", f"{nd[5]*1e3:.4f}"))
+            
+        for row in self.elem_tree.get_children():
+            self.elem_tree.delete(row)
+        for element_idx, res in element_results.items():
+            f = res['local_forces_moments']
+            self.elem_tree.insert("", "end", values=(element_idx, f"{elements_3d[element_idx][0]} -> {elements_3d[element_idx][1]}", f"{f[6]:.2f}", f"{f[9]:.2f}", f"{f[10]:.2f}", f"{f[11]:.2f}", f"{res['von_mises_stresses']['max']/1e6:.2f}"))
+
+        # 6. Matplotlib 3D Update
+        if self.canvas:
+            self.canvas.get_tk_widget().destroy()
+        
+        plt.style.use('dark_background')
+        self.fig = plt.figure(figsize=(8, 6), facecolor='#2b2b2b')
+        ax = self.fig.add_subplot(111, projection='3d')
+        ax.set_facecolor('#2b2b2b')
+        
+        max_range = max(beam_length * 0.6, 0.5)
+        mid_x = beam_length * 0.5
+        ax.set_xlim(mid_x - max_range, mid_x + max_range)
+        ax.set_ylim(-max_range, max_range)
+        ax.set_zlim(-max_range, max_range)
+        
+        displacements_reshaped = U.reshape(-1, 6)
+        deformed_nodes = nodes_3d + displacements_reshaped[:, :3] * scale_factor
+        
+        all_stresses = [res['von_mises_stresses']['max'] for res in element_results.values()]
+        norm = plt.Normalize(min(all_stresses) - 1e3, max(all_stresses) + 1e3) if max(all_stresses) - min(all_stresses) < 1e-3 else plt.Normalize(min(all_stresses), max(all_stresses))
+        cmap = plt.cm.jet
+        resolution = 12
+        
+        for i, (n1, n2) in enumerate(elements_3d):
+            pt1 = deformed_nodes[n1]
+            pt2 = deformed_nodes[n2]
+            color = cmap(norm(all_stresses[i]))
+            vector = pt2 - pt1
+            mag = np.linalg.norm(vector)
+            if mag < 1e-9: continue
+            
+            vector_norm = vector / mag
+            if np.isclose(np.abs(vector_norm[2]), 1.0):
+                v1 = np.array([1.0, 0.0, 0.0])
+            else:
+                v1 = np.array([0.0, 0.0, 1.0])
+                
+            v1 = v1 - np.dot(v1, vector_norm) * vector_norm
+            v1 = v1 / np.linalg.norm(v1)
+            v2 = np.cross(vector_norm, v1)
+            
+            theta = np.linspace(0, 2*np.pi, resolution)
+            circle_outer = outer_radius * (np.outer(np.cos(theta), v1) + np.outer(np.sin(theta), v2))
+            
+            verts_outer = []
+            for j in range(resolution - 1):
+                verts_outer.append([
+                    pt1 + circle_outer[j, :], pt1 + circle_outer[j+1, :],
+                    pt2 + circle_outer[j+1, :], pt2 + circle_outer[j, :]
+                ])
+            verts_outer.append([
+                pt1 + circle_outer[resolution-1, :], pt1 + circle_outer[0, :],
+                pt2 + circle_outer[0, :], pt2 + circle_outer[resolution-1, :]
             ])
-        verts_inner.append([
-            pt1 + circle_inner[resolution-1, :],
-            pt1 + circle_inner[0, :],
-            pt2 + circle_inner[0, :],
-            pt2 + circle_inner[resolution-1, :]
-        ])
-        ax.add_collection3d(Poly3DCollection(verts_inner, facecolor='gray', edgecolor='k', linewidths=0.1, alpha=0.4))
+            ax.add_collection3d(Poly3DCollection(verts_outer, facecolor=color, edgecolor='k', linewidths=0.15, alpha=0.9))
 
-# Plot reference nodes and labels
-ax.scatter(deformed_nodes[:, 0], deformed_nodes[:, 1], deformed_nodes[:, 2], color='black', s=80, zorder=5)
-for idx, pt in enumerate(deformed_nodes):
-    ax.text(pt[0]+0.02, pt[1]+0.02, pt[2]+0.02, f"Node {idx}", color='black', fontweight='bold', fontsize=8)
+        ax.scatter(deformed_nodes[:, 0], deformed_nodes[:, 1], deformed_nodes[:, 2], color='white', s=80, zorder=5)
+        ax.set_xlabel('X Coordinate (m)')
+        ax.set_ylabel('Y Coordinate (m)')
+        ax.set_zlabel('Z Coordinate (m)')
+        
+        # Colorbar
+        sm = plt.cm.ScalarMappable(norm=norm, cmap=cmap)
+        sm.set_array(all_stresses)
+        cbar = self.fig.colorbar(sm, ax=ax, pad=0.1, shrink=0.7)
+        cbar.set_label('Von Mises Equivalent Stress (Pa)', color='white')
+        cbar.ax.yaxis.set_tick_params(color='white')
+        plt.setp(plt.getp(cbar.ax.axes, 'yticklabels'), color='white')
 
-ax.set_xlabel('X Coordinate (m)')
-ax.set_ylabel('Y Coordinate (m)')
-ax.set_zlabel('Z Coordinate (m)')
+        self.canvas = FigureCanvasTkAgg(self.fig, master=self.plot_frame)
+        self.canvas.draw()
+        self.canvas.get_tk_widget().pack(fill="both", expand=True)
 
-# Render Colorbar inside Streamlit
-sm = plt.cm.ScalarMappable(norm=norm, cmap=cmap)
-sm.set_array(all_stresses)
-cbar = fig.colorbar(sm, ax=ax, pad=0.1, shrink=0.7)
-cbar.set_label('Von Mises Equivalent Stress (Pa)')
-
-st.pyplot(fig)
-
-# --- 8. Tabular Nodal & Element Reports ---
-st.subheader("📋 Structural Model Logs & Dataframes")
-tab1, tab2 = st.tabs(["Nodal Displacements", "Element Internal Forces & Stresses"])
-
-with tab1:
-    nodal_data = []
-    for i in range(num_nodes):
-        node_disp = U[i*6:(i+1)*6]
-        nodal_data.append({
-            "Node ID": i,
-            "Disp X (mm)": node_disp[0]*1e3,
-            "Disp Y (mm)": node_disp[1]*1e3,
-            "Disp Z (mm)": node_disp[2]*1e3,
-            "Rotation Rx (mrad)": node_disp[3]*1e3,
-            "Rotation Ry (mrad)": node_disp[4]*1e3,
-            "Rotation Rz (mrad)": node_disp[5]*1e3
-        })
-    st.dataframe(pd.DataFrame(nodal_data), use_container_width=True)
-
-with tab2:
-    element_data = []
-    for element_idx, res in element_results.items():
-        forces = res['local_forces_moments']
-        max_vm = res['von_mises_stresses']['max']
-        element_data.append({
-            "Element ID": element_idx,
-            "Connectivity": f"Node {elements_3d[element_idx][0]} ➡️ {elements_3d[element_idx][1]}",
-            "Axial Force Fx (N)": forces[6],
-            "Torsional Moment Mx (N-m)": forces[9],
-            "Bending Moment My (N-m)": forces[10],
-            "Bending Moment Mz (N-m)": forces[11],
-            "Max Von Mises (MPa)": max_vm / 1e6
-        })
-    st.dataframe(pd.DataFrame(element_data), use_container_width=True)
-
-
+if __name__ == "__main__":
+    app = FEAEngineApp()
+    app.mainloop()
