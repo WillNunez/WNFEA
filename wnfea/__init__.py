@@ -25,6 +25,14 @@ from .solver.jfnk_operator import MatrixFreeJFNKOperator
 from .solver.amg_preconditioner import BlockBeamAMGPreconditioner
 from .results.post_processor import PostProcessor, PostProcessError
 from .results.result_data import StressPoint, ElementResult, ModelResults
+from .elements import (
+    element_stiffness_c3d10,
+    element_internal_forces_c3d10,
+    element_stresses_c3d10,
+    b_matrix_c3d10,
+    shape_functions_c3d10,
+    jacobian_c3d10,
+)
 
 __all__ = [
     # Model
@@ -42,6 +50,9 @@ __all__ = [
     "create_fixed_support",
     # Mesh
     "BeamMesher", "MeshError",
+    # Elements
+    "element_stiffness_c3d10", "element_internal_forces_c3d10", "element_stresses_c3d10",
+    "b_matrix_c3d10", "shape_functions_c3d10", "jacobian_c3d10",
     # Solver
     "BeamSolver", "SolverError", "solve_linear_static",
     "solve_nonlinear_jfnk", "NonLinearConvergenceError",
@@ -50,4 +61,5 @@ __all__ = [
     "PostProcessor", "PostProcessError",
     "StressPoint", "ElementResult", "ModelResults",
 ]
+
 
