@@ -5,6 +5,7 @@ from .assembler import solve_linear_system
 from .nonlinear_solver import solve_nonlinear_jfnk, NonLinearConvergenceError
 from .jfnk_operator import MatrixFreeJFNKOperator
 from .amg_preconditioner import BlockBeamAMGPreconditioner
+from .mixed_precision import PrecisionConfig, MIXED_FP32, TRI_PRECISION, FULL_FP64
 
 __all__ = [
     "BeamSolver",
@@ -15,5 +16,9 @@ __all__ = [
     "NonLinearConvergenceError",
     "MatrixFreeJFNKOperator",
     "BlockBeamAMGPreconditioner",
+    "PrecisionConfig",
+    "MIXED_FP32",
+    "TRI_PRECISION",
+    "FULL_FP64",
 ]
 

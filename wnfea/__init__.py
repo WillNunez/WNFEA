@@ -25,6 +25,7 @@ from .solver.nonlinear_solver import solve_nonlinear_jfnk, NonLinearConvergenceE
 from .solver.jfnk_operator import MatrixFreeJFNKOperator
 from .solver.amg_preconditioner import BlockBeamAMGPreconditioner
 from .solver.dof_manager import DOFManager
+from .solver.mixed_precision import PrecisionConfig, MIXED_FP32, TRI_PRECISION, FULL_FP64
 from .results.post_processor import PostProcessor, PostProcessError
 from .results.result_data import StressPoint, ElementResult, ModelResults
 from .elements import (
@@ -60,6 +61,7 @@ __all__ = [
     "solve_nonlinear_jfnk", "NonLinearConvergenceError",
     "MatrixFreeJFNKOperator", "BlockBeamAMGPreconditioner",
     "DOFManager",
+    "PrecisionConfig", "MIXED_FP32", "TRI_PRECISION", "FULL_FP64",
     # Results
     "PostProcessor", "PostProcessError",
     "StressPoint", "ElementResult", "ModelResults",
