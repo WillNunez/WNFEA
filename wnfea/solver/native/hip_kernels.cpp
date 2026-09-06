@@ -2,9 +2,11 @@
 // Optimized for Wave32 wavefronts, 30 WGPs, 128 KB VGPRs/SIMD, and 4 MB L2 cache
 
 #include <hip/hip_runtime.h>
+#include <hip/hip_fp16.h>
 #include <cmath>
 #include <cstdio>
 #include <vector>
+#include <algorithm>
 
 #if defined(_MSC_VER) || defined(__MINGW32__)
 #ifdef __HIP_DEVICE_COMPILE__
@@ -15,6 +17,14 @@
 #else
 #define WNFEA_EXPORT __attribute__((visibility("default")))
 #endif
+
+#define HIP_CHECK(call) do { \
+    hipError_t _err = call; \
+    if (_err != hipSuccess) { \
+        fprintf(stderr, "HIP error at %s:%d: %s\n", __FILE__, __LINE__, hipGetErrorString(_err)); \
+        return (int)_err; \
+    } \
+} while (0)
 
 // ============================================================================
 // Atomic Add Helpers (FP32 & FP64)
@@ -448,6 +458,358 @@ __global__ void spmv_csr_kernel(
     }
 }
 
+// ============================================================================
+// GPU Algebraic Multigrid (AMG) V-Cycle Kernels
+// Native Wave32 execution: Jacobi smoothing, defect, prolongation & restriction
+// ============================================================================
+
+// 1. Damped Jacobi Smoother (FP64)
+// x_out[r] = (x_in ? x_in[r] : 0) + omega * inv_diag[r] * (b[r] - A * x_in)
+__launch_bounds__(256, 4)
+__global__ void jacobi_smooth_csr_kernel(
+    int num_rows,
+    const int*    __restrict__ row_ptr,
+    const int*    __restrict__ col_idx,
+    const double* __restrict__ values,
+    const double* __restrict__ inv_diag,
+    const double* __restrict__ b,
+    const double* __restrict__ x_in,
+    double*       __restrict__ x_out,
+    double omega
+) {
+    int row = blockIdx.x * blockDim.x + threadIdx.x;
+    int stride = blockDim.x * gridDim.x;
+
+    for (int r = row; r < num_rows; r += stride) {
+        int start = row_ptr[r];
+        int end   = row_ptr[r + 1];
+        if (x_in != nullptr) {
+            double sum = 0.0;
+            for (int j = start; j < end; ++j) {
+                sum += values[j] * x_in[col_idx[j]];
+            }
+            double res = b[r] - sum;
+            x_out[r] = x_in[r] + omega * inv_diag[r] * res;
+        } else {
+            x_out[r] = omega * inv_diag[r] * b[r];
+        }
+    }
+}
+
+// Damped Jacobi Smoother (FP32)
+__launch_bounds__(256, 4)
+__global__ void jacobi_smooth_csr_fp32_kernel(
+    int num_rows,
+    const int*   __restrict__ row_ptr,
+    const int*   __restrict__ col_idx,
+    const float* __restrict__ values,
+    const float* __restrict__ inv_diag,
+    const float* __restrict__ b,
+    const float* __restrict__ x_in,
+    float*       __restrict__ x_out,
+    float omega
+) {
+    int row = blockIdx.x * blockDim.x + threadIdx.x;
+    int stride = blockDim.x * gridDim.x;
+
+    for (int r = row; r < num_rows; r += stride) {
+        int start = row_ptr[r];
+        int end   = row_ptr[r + 1];
+        if (x_in != nullptr) {
+            float sum = 0.0f;
+            for (int j = start; j < end; ++j) {
+                sum += values[j] * x_in[col_idx[j]];
+            }
+            float res = b[r] - sum;
+            x_out[r] = x_in[r] + omega * inv_diag[r] * res;
+        } else {
+            x_out[r] = omega * inv_diag[r] * b[r];
+        }
+    }
+}
+
+// Damped Jacobi Smoother (FP16 storage, FP32 accumulation)
+__launch_bounds__(256, 4)
+__global__ void jacobi_smooth_csr_fp16_kernel(
+    int num_rows,
+    const int*    __restrict__ row_ptr,
+    const int*    __restrict__ col_idx,
+    const __half* __restrict__ values,
+    const __half* __restrict__ inv_diag,
+    const __half* __restrict__ b,
+    const __half* __restrict__ x_in,
+    __half*       __restrict__ x_out,
+    float omega
+) {
+    int row = blockIdx.x * blockDim.x + threadIdx.x;
+    int stride = blockDim.x * gridDim.x;
+
+    for (int r = row; r < num_rows; r += stride) {
+        int start = row_ptr[r];
+        int end   = row_ptr[r + 1];
+        if (x_in != nullptr) {
+            float sum = 0.0f;
+            for (int j = start; j < end; ++j) {
+                sum += __half2float(values[j]) * __half2float(x_in[col_idx[j]]);
+            }
+            float res = __half2float(b[r]) - sum;
+            float x_new = __half2float(x_in[r]) + omega * __half2float(inv_diag[r]) * res;
+            x_out[r] = __float2half(x_new);
+        } else {
+            float x_new = omega * __half2float(inv_diag[r]) * __half2float(b[r]);
+            x_out[r] = __float2half(x_new);
+        }
+    }
+}
+
+// 2. Defect Computation res = b - A * x
+__launch_bounds__(256, 4)
+__global__ void defect_csr_kernel(
+    int num_rows,
+    const int*    __restrict__ row_ptr,
+    const int*    __restrict__ col_idx,
+    const double* __restrict__ values,
+    const double* __restrict__ b,
+    const double* __restrict__ x,
+    double*       __restrict__ res
+) {
+    int row = blockIdx.x * blockDim.x + threadIdx.x;
+    int stride = blockDim.x * gridDim.x;
+
+    for (int r = row; r < num_rows; r += stride) {
+        int start = row_ptr[r];
+        int end   = row_ptr[r + 1];
+        double sum = 0.0;
+        for (int j = start; j < end; ++j) {
+            sum += values[j] * x[col_idx[j]];
+        }
+        res[r] = b[r] - sum;
+    }
+}
+
+__launch_bounds__(256, 4)
+__global__ void defect_csr_fp32_kernel(
+    int num_rows,
+    const int*   __restrict__ row_ptr,
+    const int*   __restrict__ col_idx,
+    const float* __restrict__ values,
+    const float* __restrict__ b,
+    const float* __restrict__ x,
+    float*       __restrict__ res
+) {
+    int row = blockIdx.x * blockDim.x + threadIdx.x;
+    int stride = blockDim.x * gridDim.x;
+
+    for (int r = row; r < num_rows; r += stride) {
+        int start = row_ptr[r];
+        int end   = row_ptr[r + 1];
+        float sum = 0.0f;
+        for (int j = start; j < end; ++j) {
+            sum += values[j] * x[col_idx[j]];
+        }
+        res[r] = b[r] - sum;
+    }
+}
+
+__launch_bounds__(256, 4)
+__global__ void defect_csr_fp16_kernel(
+    int num_rows,
+    const int*    __restrict__ row_ptr,
+    const int*    __restrict__ col_idx,
+    const __half* __restrict__ values,
+    const __half* __restrict__ b,
+    const __half* __restrict__ x,
+    __half*       __restrict__ res
+) {
+    int row = blockIdx.x * blockDim.x + threadIdx.x;
+    int stride = blockDim.x * gridDim.x;
+
+    for (int r = row; r < num_rows; r += stride) {
+        int start = row_ptr[r];
+        int end   = row_ptr[r + 1];
+        float sum = 0.0f;
+        for (int j = start; j < end; ++j) {
+            sum += __half2float(values[j]) * __half2float(x[col_idx[j]]);
+        }
+        float r_val = __half2float(b[r]) - sum;
+        res[r] = __float2half(r_val);
+    }
+}
+
+// 3. Fused Prolongation + Accumulate: x += P * e_coarse
+__launch_bounds__(256, 4)
+__global__ void prolongation_add_kernel(
+    int num_rows,
+    const int*    __restrict__ p_row_ptr,
+    const int*    __restrict__ p_col_idx,
+    const double* __restrict__ p_values,
+    const double* __restrict__ e_coarse,
+    double*       __restrict__ x
+) {
+    int row = blockIdx.x * blockDim.x + threadIdx.x;
+    int stride = blockDim.x * gridDim.x;
+
+    for (int r = row; r < num_rows; r += stride) {
+        int start = p_row_ptr[r];
+        int end   = p_row_ptr[r + 1];
+        double sum = 0.0;
+        for (int j = start; j < end; ++j) {
+            sum += p_values[j] * e_coarse[p_col_idx[j]];
+        }
+        x[r] += sum;
+    }
+}
+
+__launch_bounds__(256, 4)
+__global__ void prolongation_add_fp32_kernel(
+    int num_rows,
+    const int*   __restrict__ p_row_ptr,
+    const int*   __restrict__ p_col_idx,
+    const float* __restrict__ p_values,
+    const float* __restrict__ e_coarse,
+    float*       __restrict__ x
+) {
+    int row = blockIdx.x * blockDim.x + threadIdx.x;
+    int stride = blockDim.x * gridDim.x;
+
+    for (int r = row; r < num_rows; r += stride) {
+        int start = p_row_ptr[r];
+        int end   = p_row_ptr[r + 1];
+        float sum = 0.0f;
+        for (int j = start; j < end; ++j) {
+            sum += p_values[j] * e_coarse[p_col_idx[j]];
+        }
+        x[r] += sum;
+    }
+}
+
+__launch_bounds__(256, 4)
+__global__ void prolongation_add_fp16_kernel(
+    int num_rows,
+    const int*    __restrict__ p_row_ptr,
+    const int*    __restrict__ p_col_idx,
+    const __half* __restrict__ p_values,
+    const __half* __restrict__ e_coarse,
+    __half*       __restrict__ x
+) {
+    int row = blockIdx.x * blockDim.x + threadIdx.x;
+    int stride = blockDim.x * gridDim.x;
+
+    for (int r = row; r < num_rows; r += stride) {
+        int start = p_row_ptr[r];
+        int end   = p_row_ptr[r + 1];
+        float sum = 0.0f;
+        for (int j = start; j < end; ++j) {
+            sum += __half2float(p_values[j]) * __half2float(e_coarse[p_col_idx[j]]);
+        }
+        float x_new = __half2float(x[r]) + sum;
+        x[r] = __float2half(x_new);
+    }
+}
+
+// 4. SpMV in FP32 & FP16 (for restriction R * res)
+__launch_bounds__(256, 4)
+__global__ void spmv_csr_fp32_kernel(
+    int num_rows,
+    const int*   __restrict__ row_ptr,
+    const int*   __restrict__ col_idx,
+    const float* __restrict__ values,
+    const float* __restrict__ x,
+    float*       __restrict__ y,
+    float alpha,
+    float beta
+) {
+    int row = blockIdx.x * blockDim.x + threadIdx.x;
+    int stride = blockDim.x * gridDim.x;
+
+    for (int r = row; r < num_rows; r += stride) {
+        int start = row_ptr[r];
+        int end   = row_ptr[r + 1];
+        float sum = 0.0f;
+        for (int j = start; j < end; ++j) {
+            sum += values[j] * x[col_idx[j]];
+        }
+        if (beta == 0.0f) {
+            y[r] = alpha * sum;
+        } else {
+            y[r] = alpha * sum + beta * y[r];
+        }
+    }
+}
+
+__launch_bounds__(256, 4)
+__global__ void spmv_csr_fp16_kernel(
+    int num_rows,
+    const int*    __restrict__ row_ptr,
+    const int*    __restrict__ col_idx,
+    const __half* __restrict__ values,
+    const __half* __restrict__ x,
+    __half*       __restrict__ y
+) {
+    int row = blockIdx.x * blockDim.x + threadIdx.x;
+    int stride = blockDim.x * gridDim.x;
+
+    for (int r = row; r < num_rows; r += stride) {
+        int start = row_ptr[r];
+        int end   = row_ptr[r + 1];
+        float sum = 0.0f;
+        for (int j = start; j < end; ++j) {
+            sum += __half2float(values[j]) * __half2float(x[col_idx[j]]);
+        }
+        y[r] = __float2half(sum);
+    }
+}
+
+// 5. Symmetric Diagonal Equilibration & Precision Casting
+__launch_bounds__(256, 4)
+__global__ void vec_pointwise_mult_kernel(
+    int n,
+    const double* __restrict__ in,
+    const double* __restrict__ diag,
+    double*       __restrict__ out
+) {
+    int i = blockIdx.x * blockDim.x + threadIdx.x;
+    int stride = blockDim.x * gridDim.x;
+    for (int idx = i; idx < n; idx += stride) {
+        out[idx] = in[idx] * diag[idx];
+    }
+}
+
+__launch_bounds__(256, 4)
+__global__ void cast_double_to_float_kernel(int n, const double* __restrict__ in, float* __restrict__ out) {
+    int i = blockIdx.x * blockDim.x + threadIdx.x;
+    int stride = blockDim.x * gridDim.x;
+    for (int idx = i; idx < n; idx += stride) {
+        out[idx] = (float)in[idx];
+    }
+}
+
+__launch_bounds__(256, 4)
+__global__ void cast_float_to_double_kernel(int n, const float* __restrict__ in, double* __restrict__ out) {
+    int i = blockIdx.x * blockDim.x + threadIdx.x;
+    int stride = blockDim.x * gridDim.x;
+    for (int idx = i; idx < n; idx += stride) {
+        out[idx] = (double)in[idx];
+    }
+}
+
+__launch_bounds__(256, 4)
+__global__ void cast_double_to_half_kernel(int n, const double* __restrict__ in, __half* __restrict__ out) {
+    int i = blockIdx.x * blockDim.x + threadIdx.x;
+    int stride = blockDim.x * gridDim.x;
+    for (int idx = i; idx < n; idx += stride) {
+        out[idx] = __float2half((float)in[idx]);
+    }
+}
+
+__launch_bounds__(256, 4)
+__global__ void cast_half_to_double_kernel(int n, const __half* __restrict__ in, double* __restrict__ out) {
+    int i = blockIdx.x * blockDim.x + threadIdx.x;
+    int stride = blockDim.x * gridDim.x;
+    for (int idx = i; idx < n; idx += stride) {
+        out[idx] = (double)__half2float(in[idx]);
+    }
+}
 
 // ============================================================================
 // Exported C Interface for Host & Python Dispatch
@@ -668,6 +1030,580 @@ WNFEA_EXPORT int hip_spmv_csr_solve(
     hipFree(d_y);
 
     return 0;
+}
+
+// ============================================================================
+// Resident GPU AMG Preconditioner Data Structures & C API
+// Keeps all level matrices and scratch vectors in VRAM on the AMD GPU
+// ============================================================================
+
+struct HipCSR {
+    int num_rows = 0;
+    int num_cols = 0;
+    int nnz = 0;
+    int* d_row_ptr = nullptr;
+    int* d_col_idx = nullptr;
+    double* d_values_f64 = nullptr;
+    float*  d_values_f32 = nullptr;
+    __half* d_values_f16 = nullptr;
+
+    void free() {
+        if (d_row_ptr)    { hipFree(d_row_ptr);    d_row_ptr = nullptr; }
+        if (d_col_idx)    { hipFree(d_col_idx);    d_col_idx = nullptr; }
+        if (d_values_f64) { hipFree(d_values_f64); d_values_f64 = nullptr; }
+        if (d_values_f32) { hipFree(d_values_f32); d_values_f32 = nullptr; }
+        if (d_values_f16) { hipFree(d_values_f16); d_values_f16 = nullptr; }
+    }
+};
+
+struct HipAMGLevelData {
+    int fine_rows = 0;
+    int coarse_rows = 0;
+    HipCSR A;
+    double* d_inv_diag_f64 = nullptr;
+    float*  d_inv_diag_f32 = nullptr;
+    __half* d_inv_diag_f16 = nullptr;
+    HipCSR P;
+    HipCSR R;
+
+    // Persistent work vectors in GPU VRAM (allocated once at setup)
+    double* d_b_f64 = nullptr;
+    double* d_x_f64 = nullptr;
+    double* d_x_temp_f64 = nullptr;
+    double* d_res_f64 = nullptr;
+
+    float*  d_b_f32 = nullptr;
+    float*  d_x_f32 = nullptr;
+    float*  d_x_temp_f32 = nullptr;
+    float*  d_res_f32 = nullptr;
+
+    __half* d_b_f16 = nullptr;
+    __half* d_x_f16 = nullptr;
+    __half* d_x_temp_f16 = nullptr;
+    __half* d_res_f16 = nullptr;
+
+    void free() {
+        A.free();
+        P.free();
+        R.free();
+        if (d_inv_diag_f64) { hipFree(d_inv_diag_f64); d_inv_diag_f64 = nullptr; }
+        if (d_inv_diag_f32) { hipFree(d_inv_diag_f32); d_inv_diag_f32 = nullptr; }
+        if (d_inv_diag_f16) { hipFree(d_inv_diag_f16); d_inv_diag_f16 = nullptr; }
+
+        if (d_b_f64)        { hipFree(d_b_f64);        d_b_f64 = nullptr; }
+        if (d_x_f64)        { hipFree(d_x_f64);        d_x_f64 = nullptr; }
+        if (d_x_temp_f64)   { hipFree(d_x_temp_f64);   d_x_temp_f64 = nullptr; }
+        if (d_res_f64)      { hipFree(d_res_f64);      d_res_f64 = nullptr; }
+
+        if (d_b_f32)        { hipFree(d_b_f32);        d_b_f32 = nullptr; }
+        if (d_x_f32)        { hipFree(d_x_f32);        d_x_f32 = nullptr; }
+        if (d_x_temp_f32)   { hipFree(d_x_temp_f32);   d_x_temp_f32 = nullptr; }
+        if (d_res_f32)      { hipFree(d_res_f32);      d_res_f32 = nullptr; }
+
+        if (d_b_f16)        { hipFree(d_b_f16);        d_b_f16 = nullptr; }
+        if (d_x_f16)        { hipFree(d_x_f16);        d_x_f16 = nullptr; }
+        if (d_x_temp_f16)   { hipFree(d_x_temp_f16);   d_x_temp_f16 = nullptr; }
+        if (d_res_f16)      { hipFree(d_res_f16);      d_res_f16 = nullptr; }
+    }
+};
+
+struct HipAMGSolver {
+    int num_levels = 0;
+    int fine_size = 0;
+    double* d_fine_inv_sqrt_d_f64 = nullptr;
+    double* d_work_in_f64 = nullptr;
+    double* d_work_out_f64 = nullptr;
+    std::vector<HipAMGLevelData> levels;
+
+    // Coarsest level direct solve on CPU
+    int coarsest_size = 0;
+    std::vector<double> h_coarse_L;
+    std::vector<double> h_coarse_r;
+    std::vector<double> h_coarse_x;
+    std::vector<double> h_coarse_y;
+
+    void free() {
+        for (auto& lvl : levels) {
+            lvl.free();
+        }
+        levels.clear();
+        if (d_fine_inv_sqrt_d_f64) { hipFree(d_fine_inv_sqrt_d_f64); d_fine_inv_sqrt_d_f64 = nullptr; }
+        if (d_work_in_f64)         { hipFree(d_work_in_f64);         d_work_in_f64 = nullptr; }
+        if (d_work_out_f64)        { hipFree(d_work_out_f64);        d_work_out_f64 = nullptr; }
+    }
+};
+
+inline void solve_coarse_cholesky_internal(HipAMGSolver* solver, const double* r, double* x) {
+    int m = solver->coarsest_size;
+    const double* L = solver->h_coarse_L.data();
+    double* y = solver->h_coarse_y.data();
+
+    // Forward substitution: L * y = r
+    for (int i = 0; i < m; ++i) {
+        double s = r[i];
+        for (int j = 0; j < i; ++j) {
+            s -= L[i * m + j] * y[j];
+        }
+        y[i] = s / L[i * m + i];
+    }
+    // Backward substitution: L^T * x = y
+    for (int i = m - 1; i >= 0; --i) {
+        double s = y[i];
+        for (int j = i + 1; j < m; ++j) {
+            s -= L[j * m + i] * x[j];
+        }
+        x[i] = s / L[i * m + i];
+    }
+}
+
+WNFEA_EXPORT void* hip_amg_create(int num_levels, int fine_size, const double* h_inv_sqrt_d) {
+    if (num_levels <= 0 || fine_size <= 0) return nullptr;
+
+    HipAMGSolver* solver = new HipAMGSolver();
+    solver->num_levels = num_levels;
+    solver->fine_size = fine_size;
+    solver->levels.resize(num_levels);
+
+    hipMalloc(&solver->d_fine_inv_sqrt_d_f64, fine_size * sizeof(double));
+    hipMalloc(&solver->d_work_in_f64, fine_size * sizeof(double));
+    hipMalloc(&solver->d_work_out_f64, fine_size * sizeof(double));
+
+    if (h_inv_sqrt_d != nullptr) {
+        hipMemcpy(solver->d_fine_inv_sqrt_d_f64, h_inv_sqrt_d, fine_size * sizeof(double), hipMemcpyHostToDevice);
+    } else {
+        std::vector<double> ones(fine_size, 1.0);
+        hipMemcpy(solver->d_fine_inv_sqrt_d_f64, ones.data(), fine_size * sizeof(double), hipMemcpyHostToDevice);
+    }
+
+    return (void*)solver;
+}
+
+WNFEA_EXPORT int hip_amg_set_level(
+    void* handle,
+    int level_idx,
+    int fine_rows,
+    int coarse_rows,
+    // Matrix A
+    int a_nnz,
+    const int* h_a_row_ptr,
+    const int* h_a_col_idx,
+    const double* h_a_values,
+    const double* h_inv_diag,
+    // Matrix P (null if coarsest)
+    int p_nnz,
+    const int* h_p_row_ptr,
+    const int* h_p_col_idx,
+    const double* h_p_values,
+    // Matrix R (null if coarsest)
+    int r_nnz,
+    const int* h_r_row_ptr,
+    const int* h_r_col_idx,
+    const double* h_r_values
+) {
+    if (!handle) return -1;
+    HipAMGSolver* solver = (HipAMGSolver*)handle;
+    if (level_idx < 0 || level_idx >= solver->num_levels) return -2;
+
+    auto& lvl = solver->levels[level_idx];
+    lvl.fine_rows = fine_rows;
+    lvl.coarse_rows = coarse_rows;
+
+    // 1. Matrix A
+    lvl.A.num_rows = fine_rows;
+    lvl.A.num_cols = fine_rows;
+    lvl.A.nnz = a_nnz;
+    HIP_CHECK(hipMalloc(&lvl.A.d_row_ptr, (fine_rows + 1) * sizeof(int)));
+    HIP_CHECK(hipMalloc(&lvl.A.d_col_idx, a_nnz * sizeof(int)));
+    HIP_CHECK(hipMalloc(&lvl.A.d_values_f64, a_nnz * sizeof(double)));
+    HIP_CHECK(hipMalloc(&lvl.A.d_values_f32, a_nnz * sizeof(float)));
+    HIP_CHECK(hipMalloc(&lvl.A.d_values_f16, a_nnz * sizeof(__half)));
+
+    HIP_CHECK(hipMemcpy(lvl.A.d_row_ptr, h_a_row_ptr, (fine_rows + 1) * sizeof(int), hipMemcpyHostToDevice));
+    HIP_CHECK(hipMemcpy(lvl.A.d_col_idx, h_a_col_idx, a_nnz * sizeof(int), hipMemcpyHostToDevice));
+    HIP_CHECK(hipMemcpy(lvl.A.d_values_f64, h_a_values, a_nnz * sizeof(double), hipMemcpyHostToDevice));
+
+    std::vector<float> a_f32(a_nnz);
+    std::vector<__half> a_f16(a_nnz);
+    for (int i = 0; i < a_nnz; ++i) {
+        a_f32[i] = (float)h_a_values[i];
+        a_f16[i] = __float2half((float)h_a_values[i]);
+    }
+    HIP_CHECK(hipMemcpy(lvl.A.d_values_f32, a_f32.data(), a_nnz * sizeof(float), hipMemcpyHostToDevice));
+    HIP_CHECK(hipMemcpy(lvl.A.d_values_f16, a_f16.data(), a_nnz * sizeof(__half), hipMemcpyHostToDevice));
+
+    // Inv Diag
+    HIP_CHECK(hipMalloc(&lvl.d_inv_diag_f64, fine_rows * sizeof(double)));
+    HIP_CHECK(hipMalloc(&lvl.d_inv_diag_f32, fine_rows * sizeof(float)));
+    HIP_CHECK(hipMalloc(&lvl.d_inv_diag_f16, fine_rows * sizeof(__half)));
+    HIP_CHECK(hipMemcpy(lvl.d_inv_diag_f64, h_inv_diag, fine_rows * sizeof(double), hipMemcpyHostToDevice));
+
+    std::vector<float> diag_f32(fine_rows);
+    std::vector<__half> diag_f16(fine_rows);
+    for (int i = 0; i < fine_rows; ++i) {
+        diag_f32[i] = (float)h_inv_diag[i];
+        diag_f16[i] = __float2half((float)h_inv_diag[i]);
+    }
+    HIP_CHECK(hipMemcpy(lvl.d_inv_diag_f32, diag_f32.data(), fine_rows * sizeof(float), hipMemcpyHostToDevice));
+    HIP_CHECK(hipMemcpy(lvl.d_inv_diag_f16, diag_f16.data(), fine_rows * sizeof(__half), hipMemcpyHostToDevice));
+
+    // 2. Matrix P (if not coarsest)
+    if (p_nnz > 0 && h_p_row_ptr && h_p_col_idx && h_p_values) {
+        lvl.P.num_rows = fine_rows;
+        lvl.P.num_cols = coarse_rows;
+        lvl.P.nnz = p_nnz;
+        HIP_CHECK(hipMalloc(&lvl.P.d_row_ptr, (fine_rows + 1) * sizeof(int)));
+        HIP_CHECK(hipMalloc(&lvl.P.d_col_idx, p_nnz * sizeof(int)));
+        HIP_CHECK(hipMalloc(&lvl.P.d_values_f64, p_nnz * sizeof(double)));
+        HIP_CHECK(hipMalloc(&lvl.P.d_values_f32, p_nnz * sizeof(float)));
+        HIP_CHECK(hipMalloc(&lvl.P.d_values_f16, p_nnz * sizeof(__half)));
+
+        HIP_CHECK(hipMemcpy(lvl.P.d_row_ptr, h_p_row_ptr, (fine_rows + 1) * sizeof(int), hipMemcpyHostToDevice));
+        HIP_CHECK(hipMemcpy(lvl.P.d_col_idx, h_p_col_idx, p_nnz * sizeof(int), hipMemcpyHostToDevice));
+        HIP_CHECK(hipMemcpy(lvl.P.d_values_f64, h_p_values, p_nnz * sizeof(double), hipMemcpyHostToDevice));
+
+        std::vector<float> p_f32(p_nnz);
+        std::vector<__half> p_f16(p_nnz);
+        for (int i = 0; i < p_nnz; ++i) {
+            p_f32[i] = (float)h_p_values[i];
+            p_f16[i] = __float2half((float)h_p_values[i]);
+        }
+        HIP_CHECK(hipMemcpy(lvl.P.d_values_f32, p_f32.data(), p_nnz * sizeof(float), hipMemcpyHostToDevice));
+        HIP_CHECK(hipMemcpy(lvl.P.d_values_f16, p_f16.data(), p_nnz * sizeof(__half), hipMemcpyHostToDevice));
+    }
+
+    // 3. Matrix R (if not coarsest)
+    if (r_nnz > 0 && h_r_row_ptr && h_r_col_idx && h_r_values) {
+        lvl.R.num_rows = coarse_rows;
+        lvl.R.num_cols = fine_rows;
+        lvl.R.nnz = r_nnz;
+        HIP_CHECK(hipMalloc(&lvl.R.d_row_ptr, (coarse_rows + 1) * sizeof(int)));
+        HIP_CHECK(hipMalloc(&lvl.R.d_col_idx, r_nnz * sizeof(int)));
+        HIP_CHECK(hipMalloc(&lvl.R.d_values_f64, r_nnz * sizeof(double)));
+        HIP_CHECK(hipMalloc(&lvl.R.d_values_f32, r_nnz * sizeof(float)));
+        HIP_CHECK(hipMalloc(&lvl.R.d_values_f16, r_nnz * sizeof(__half)));
+
+        HIP_CHECK(hipMemcpy(lvl.R.d_row_ptr, h_r_row_ptr, (coarse_rows + 1) * sizeof(int), hipMemcpyHostToDevice));
+        HIP_CHECK(hipMemcpy(lvl.R.d_col_idx, h_r_col_idx, r_nnz * sizeof(int), hipMemcpyHostToDevice));
+        HIP_CHECK(hipMemcpy(lvl.R.d_values_f64, h_r_values, r_nnz * sizeof(double), hipMemcpyHostToDevice));
+
+        std::vector<float> r_f32(r_nnz);
+        std::vector<__half> r_f16(r_nnz);
+        for (int i = 0; i < r_nnz; ++i) {
+            r_f32[i] = (float)h_r_values[i];
+            r_f16[i] = __float2half((float)h_r_values[i]);
+        }
+        HIP_CHECK(hipMemcpy(lvl.R.d_values_f32, r_f32.data(), r_nnz * sizeof(float), hipMemcpyHostToDevice));
+        HIP_CHECK(hipMemcpy(lvl.R.d_values_f16, r_f16.data(), r_nnz * sizeof(__half), hipMemcpyHostToDevice));
+    }
+
+    // 4. Pre-allocate work vectors in GPU VRAM
+    HIP_CHECK(hipMalloc(&lvl.d_b_f64,      fine_rows * sizeof(double)));
+    HIP_CHECK(hipMalloc(&lvl.d_x_f64,      fine_rows * sizeof(double)));
+    HIP_CHECK(hipMalloc(&lvl.d_x_temp_f64, fine_rows * sizeof(double)));
+    HIP_CHECK(hipMalloc(&lvl.d_res_f64,    fine_rows * sizeof(double)));
+
+    HIP_CHECK(hipMalloc(&lvl.d_b_f32,      fine_rows * sizeof(float)));
+    HIP_CHECK(hipMalloc(&lvl.d_x_f32,      fine_rows * sizeof(float)));
+    HIP_CHECK(hipMalloc(&lvl.d_x_temp_f32, fine_rows * sizeof(float)));
+    HIP_CHECK(hipMalloc(&lvl.d_res_f32,    fine_rows * sizeof(float)));
+
+    HIP_CHECK(hipMalloc(&lvl.d_b_f16,      fine_rows * sizeof(__half)));
+    HIP_CHECK(hipMalloc(&lvl.d_x_f16,      fine_rows * sizeof(__half)));
+    HIP_CHECK(hipMalloc(&lvl.d_x_temp_f16, fine_rows * sizeof(__half)));
+    HIP_CHECK(hipMalloc(&lvl.d_res_f16,    fine_rows * sizeof(__half)));
+
+    return 0;
+}
+
+WNFEA_EXPORT int hip_amg_set_coarse_cholesky(
+    void* handle,
+    int coarse_size,
+    const double* h_L_dense
+) {
+    if (!handle || coarse_size <= 0 || !h_L_dense) return -1;
+    HipAMGSolver* solver = (HipAMGSolver*)handle;
+    solver->coarsest_size = coarse_size;
+    solver->h_coarse_L.assign(h_L_dense, h_L_dense + coarse_size * coarse_size);
+    solver->h_coarse_r.resize(coarse_size);
+    solver->h_coarse_x.resize(coarse_size);
+    solver->h_coarse_y.resize(coarse_size);
+    return 0;
+}
+
+WNFEA_EXPORT int hip_amg_apply_vcycle_device(
+    void* handle,
+    const double* d_r,
+    double* d_z,
+    int precision_mode
+) {
+    if (!handle || !d_r || !d_z) return -1;
+    HipAMGSolver* solver = (HipAMGSolver*)handle;
+    int fine_size = solver->fine_size;
+    int num_levels = solver->num_levels;
+    int block_size = 256;
+    int grid_0 = std::min(std::max((fine_size + block_size - 1) / block_size, 60), 480);
+
+    // MODE 0: FP64 V-Cycle
+    if (precision_mode == 0) {
+        // 1. Initial equilibration: r_equil = D^{-1/2} * r -> stored in levels[0].d_b_f64
+        hipLaunchKernelGGL(vec_pointwise_mult_kernel, dim3(grid_0), dim3(block_size), 0, 0,
+                           fine_size, d_r, solver->d_fine_inv_sqrt_d_f64, solver->levels[0].d_b_f64);
+
+        // 2. Downward sweep
+        for (int l = 0; l < num_levels - 1; ++l) {
+            auto& lvl = solver->levels[l];
+            int grid_l = std::min(std::max((lvl.fine_rows + block_size - 1) / block_size, 60), 480);
+            int grid_c = std::min(std::max((lvl.coarse_rows + block_size - 1) / block_size, 60), 480);
+
+            // Pre-smooth: x_0 = 0 -> output to lvl.d_x_f64
+            hipLaunchKernelGGL(jacobi_smooth_csr_kernel, dim3(grid_l), dim3(block_size), 0, 0,
+                               lvl.fine_rows, lvl.A.d_row_ptr, lvl.A.d_col_idx, lvl.A.d_values_f64,
+                               lvl.d_inv_diag_f64, lvl.d_b_f64, (const double*)nullptr, lvl.d_x_f64, 0.67);
+
+            // Defect: res_l = b_l - A_l * x_l
+            hipLaunchKernelGGL(defect_csr_kernel, dim3(grid_l), dim3(block_size), 0, 0,
+                               lvl.fine_rows, lvl.A.d_row_ptr, lvl.A.d_col_idx, lvl.A.d_values_f64,
+                               lvl.d_b_f64, lvl.d_x_f64, lvl.d_res_f64);
+
+            // Restriction: r_{l+1} = R_l * res_l -> stored in solver->levels[l+1].d_b_f64
+            hipLaunchKernelGGL(spmv_csr_kernel, dim3(grid_c), dim3(block_size), 0, 0,
+                               lvl.coarse_rows, lvl.R.d_row_ptr, lvl.R.d_col_idx, lvl.R.d_values_f64,
+                               lvl.d_res_f64, solver->levels[l + 1].d_b_f64, 1.0, 0.0);
+        }
+
+        // 3. Coarsest solve
+        int last = num_levels - 1;
+        auto& coarsest = solver->levels[last];
+        int c_size = coarsest.fine_rows;
+
+        if (solver->coarsest_size == c_size && !solver->h_coarse_L.empty() && (int)solver->h_coarse_L.size() == c_size * c_size) {
+            HIP_CHECK(hipMemcpy(solver->h_coarse_r.data(), coarsest.d_b_f64, c_size * sizeof(double), hipMemcpyDeviceToHost));
+            solve_coarse_cholesky_internal(solver, solver->h_coarse_r.data(), solver->h_coarse_x.data());
+            HIP_CHECK(hipMemcpy(coarsest.d_x_f64, solver->h_coarse_x.data(), c_size * sizeof(double), hipMemcpyHostToDevice));
+        } else {
+            int grid_last = std::min(std::max((c_size + block_size - 1) / block_size, 60), 480);
+            for (int it = 0; it < 2; ++it) {
+                hipLaunchKernelGGL(jacobi_smooth_csr_kernel, dim3(grid_last), dim3(block_size), 0, 0,
+                                   coarsest.fine_rows, coarsest.A.d_row_ptr, coarsest.A.d_col_idx, coarsest.A.d_values_f64,
+                                   coarsest.d_inv_diag_f64, coarsest.d_b_f64, (it == 0 ? (const double*)nullptr : coarsest.d_x_f64),
+                                   coarsest.d_x_temp_f64, 0.67);
+                std::swap(coarsest.d_x_f64, coarsest.d_x_temp_f64);
+            }
+        }
+
+        // 4. Upward sweep
+        for (int l = num_levels - 2; l >= 0; --l) {
+            auto& lvl = solver->levels[l];
+            int grid_l = std::min(std::max((lvl.fine_rows + block_size - 1) / block_size, 60), 480);
+            const double* e_coarse = solver->levels[l + 1].d_x_f64;
+
+            // Prolongate + accumulate: x_l += P_l * e_coarse
+            hipLaunchKernelGGL(prolongation_add_kernel, dim3(grid_l), dim3(block_size), 0, 0,
+                               lvl.fine_rows, lvl.P.d_row_ptr, lvl.P.d_col_idx, lvl.P.d_values_f64,
+                               e_coarse, lvl.d_x_f64);
+
+            // Post-smooth: x_temp = x_l + omega * D_l^{-1} * (b_l - A_l * x_l)
+            hipLaunchKernelGGL(jacobi_smooth_csr_kernel, dim3(grid_l), dim3(block_size), 0, 0,
+                               lvl.fine_rows, lvl.A.d_row_ptr, lvl.A.d_col_idx, lvl.A.d_values_f64,
+                               lvl.d_inv_diag_f64, lvl.d_b_f64, lvl.d_x_f64, lvl.d_x_temp_f64, 0.67);
+
+            std::swap(lvl.d_x_f64, lvl.d_x_temp_f64);
+        }
+
+        // 5. Post-equilibrate: z = D^{-1/2} * x_0
+        hipLaunchKernelGGL(vec_pointwise_mult_kernel, dim3(grid_0), dim3(block_size), 0, 0,
+                           fine_size, solver->levels[0].d_x_f64, solver->d_fine_inv_sqrt_d_f64, d_z);
+
+        HIP_CHECK(hipDeviceSynchronize());
+        return 0;
+    }
+
+    // MODE 1: FP32 V-Cycle (2x memory bandwidth acceleration)
+    if (precision_mode == 1) {
+        // 1. Initial equilibration: r_equil = D^{-1/2} * r -> cast to FP32 in levels[0].d_b_f32
+        hipLaunchKernelGGL(vec_pointwise_mult_kernel, dim3(grid_0), dim3(block_size), 0, 0,
+                           fine_size, d_r, solver->d_fine_inv_sqrt_d_f64, solver->levels[0].d_b_f64);
+        hipLaunchKernelGGL(cast_double_to_float_kernel, dim3(grid_0), dim3(block_size), 0, 0,
+                           fine_size, solver->levels[0].d_b_f64, solver->levels[0].d_b_f32);
+
+        // 2. Downward sweep
+        for (int l = 0; l < num_levels - 1; ++l) {
+            auto& lvl = solver->levels[l];
+            int grid_l = std::min(std::max((lvl.fine_rows + block_size - 1) / block_size, 60), 480);
+            int grid_c = std::min(std::max((lvl.coarse_rows + block_size - 1) / block_size, 60), 480);
+
+            hipLaunchKernelGGL(jacobi_smooth_csr_fp32_kernel, dim3(grid_l), dim3(block_size), 0, 0,
+                               lvl.fine_rows, lvl.A.d_row_ptr, lvl.A.d_col_idx, lvl.A.d_values_f32,
+                               lvl.d_inv_diag_f32, lvl.d_b_f32, (const float*)nullptr, lvl.d_x_f32, 0.67f);
+
+            hipLaunchKernelGGL(defect_csr_fp32_kernel, dim3(grid_l), dim3(block_size), 0, 0,
+                               lvl.fine_rows, lvl.A.d_row_ptr, lvl.A.d_col_idx, lvl.A.d_values_f32,
+                               lvl.d_b_f32, lvl.d_x_f32, lvl.d_res_f32);
+
+            hipLaunchKernelGGL(spmv_csr_fp32_kernel, dim3(grid_c), dim3(block_size), 0, 0,
+                               lvl.coarse_rows, lvl.R.d_row_ptr, lvl.R.d_col_idx, lvl.R.d_values_f32,
+                               lvl.d_res_f32, solver->levels[l + 1].d_b_f32, 1.0f, 0.0f);
+        }
+
+        // 3. Coarsest solve (on host in double precision for unconditional stability)
+        int last = num_levels - 1;
+        auto& coarsest = solver->levels[last];
+        int c_size = coarsest.fine_rows;
+
+        if (solver->coarsest_size == c_size && !solver->h_coarse_L.empty() && (int)solver->h_coarse_L.size() == c_size * c_size) {
+            std::vector<float> h_r_f32(c_size);
+            HIP_CHECK(hipMemcpy(h_r_f32.data(), coarsest.d_b_f32, c_size * sizeof(float), hipMemcpyDeviceToHost));
+            for (int i = 0; i < c_size; ++i) solver->h_coarse_r[i] = (double)h_r_f32[i];
+            solve_coarse_cholesky_internal(solver, solver->h_coarse_r.data(), solver->h_coarse_x.data());
+            std::vector<float> h_x_f32(c_size);
+            for (int i = 0; i < c_size; ++i) h_x_f32[i] = (float)solver->h_coarse_x[i];
+            HIP_CHECK(hipMemcpy(coarsest.d_x_f32, h_x_f32.data(), c_size * sizeof(float), hipMemcpyHostToDevice));
+        } else {
+            int grid_last = std::min(std::max((c_size + block_size - 1) / block_size, 60), 480);
+            for (int it = 0; it < 2; ++it) {
+                hipLaunchKernelGGL(jacobi_smooth_csr_fp32_kernel, dim3(grid_last), dim3(block_size), 0, 0,
+                                   coarsest.fine_rows, coarsest.A.d_row_ptr, coarsest.A.d_col_idx, coarsest.A.d_values_f32,
+                                   coarsest.d_inv_diag_f32, coarsest.d_b_f32, (it == 0 ? (const float*)nullptr : coarsest.d_x_f32),
+                                   coarsest.d_x_temp_f32, 0.67f);
+                std::swap(coarsest.d_x_f32, coarsest.d_x_temp_f32);
+            }
+        }
+
+        // 4. Upward sweep
+        for (int l = num_levels - 2; l >= 0; --l) {
+            auto& lvl = solver->levels[l];
+            int grid_l = std::min(std::max((lvl.fine_rows + block_size - 1) / block_size, 60), 480);
+            const float* e_coarse = solver->levels[l + 1].d_x_f32;
+
+            hipLaunchKernelGGL(prolongation_add_fp32_kernel, dim3(grid_l), dim3(block_size), 0, 0,
+                               lvl.fine_rows, lvl.P.d_row_ptr, lvl.P.d_col_idx, lvl.P.d_values_f32,
+                               e_coarse, lvl.d_x_f32);
+
+            hipLaunchKernelGGL(jacobi_smooth_csr_fp32_kernel, dim3(grid_l), dim3(block_size), 0, 0,
+                               lvl.fine_rows, lvl.A.d_row_ptr, lvl.A.d_col_idx, lvl.A.d_values_f32,
+                               lvl.d_inv_diag_f32, lvl.d_b_f32, lvl.d_x_f32, lvl.d_x_temp_f32, 0.67f);
+
+            std::swap(lvl.d_x_f32, lvl.d_x_temp_f32);
+        }
+
+        // 5. Cast back to FP64 & post-equilibrate into d_z
+        hipLaunchKernelGGL(cast_float_to_double_kernel, dim3(grid_0), dim3(block_size), 0, 0,
+                           fine_size, solver->levels[0].d_x_f32, solver->levels[0].d_x_f64);
+        hipLaunchKernelGGL(vec_pointwise_mult_kernel, dim3(grid_0), dim3(block_size), 0, 0,
+                           fine_size, solver->levels[0].d_x_f64, solver->d_fine_inv_sqrt_d_f64, d_z);
+
+        HIP_CHECK(hipDeviceSynchronize());
+        return 0;
+    }
+
+    // MODE 2: FP16 V-Cycle (4x memory bandwidth acceleration)
+    if (precision_mode == 2) {
+        // 1. Initial equilibration: r_equil = D^{-1/2} * r
+        hipLaunchKernelGGL(vec_pointwise_mult_kernel, dim3(grid_0), dim3(block_size), 0, 0,
+                           fine_size, d_r, solver->d_fine_inv_sqrt_d_f64, solver->levels[0].d_b_f64);
+        hipLaunchKernelGGL(cast_double_to_half_kernel, dim3(grid_0), dim3(block_size), 0, 0,
+                           fine_size, solver->levels[0].d_b_f64, solver->levels[0].d_b_f16);
+
+        // 2. Downward sweep
+        for (int l = 0; l < num_levels - 1; ++l) {
+            auto& lvl = solver->levels[l];
+            int grid_l = std::min(std::max((lvl.fine_rows + block_size - 1) / block_size, 60), 480);
+            int grid_c = std::min(std::max((lvl.coarse_rows + block_size - 1) / block_size, 60), 480);
+
+            hipLaunchKernelGGL(jacobi_smooth_csr_fp16_kernel, dim3(grid_l), dim3(block_size), 0, 0,
+                               lvl.fine_rows, lvl.A.d_row_ptr, lvl.A.d_col_idx, lvl.A.d_values_f16,
+                               lvl.d_inv_diag_f16, lvl.d_b_f16, (const __half*)nullptr, lvl.d_x_f16, 0.67f);
+
+            hipLaunchKernelGGL(defect_csr_fp16_kernel, dim3(grid_l), dim3(block_size), 0, 0,
+                               lvl.fine_rows, lvl.A.d_row_ptr, lvl.A.d_col_idx, lvl.A.d_values_f16,
+                               lvl.d_b_f16, lvl.d_x_f16, lvl.d_res_f16);
+
+            hipLaunchKernelGGL(spmv_csr_fp16_kernel, dim3(grid_c), dim3(block_size), 0, 0,
+                               lvl.coarse_rows, lvl.R.d_row_ptr, lvl.R.d_col_idx, lvl.R.d_values_f16,
+                               lvl.d_res_f16, solver->levels[l + 1].d_b_f16);
+        }
+
+        // 3. Coarsest solve (on host in double precision)
+        int last = num_levels - 1;
+        auto& coarsest = solver->levels[last];
+        int c_size = coarsest.fine_rows;
+
+        if (solver->coarsest_size == c_size && !solver->h_coarse_L.empty() && (int)solver->h_coarse_L.size() == c_size * c_size) {
+            std::vector<__half> h_r_f16(c_size);
+            HIP_CHECK(hipMemcpy(h_r_f16.data(), coarsest.d_b_f16, c_size * sizeof(__half), hipMemcpyDeviceToHost));
+            for (int i = 0; i < c_size; ++i) solver->h_coarse_r[i] = (double)__half2float(h_r_f16[i]);
+            solve_coarse_cholesky_internal(solver, solver->h_coarse_r.data(), solver->h_coarse_x.data());
+            std::vector<__half> h_x_f16(c_size);
+            for (int i = 0; i < c_size; ++i) h_x_f16[i] = __float2half((float)solver->h_coarse_x[i]);
+            HIP_CHECK(hipMemcpy(coarsest.d_x_f16, h_x_f16.data(), c_size * sizeof(__half), hipMemcpyHostToDevice));
+        } else {
+            int grid_last = std::min(std::max((c_size + block_size - 1) / block_size, 60), 480);
+            for (int it = 0; it < 2; ++it) {
+                hipLaunchKernelGGL(jacobi_smooth_csr_fp16_kernel, dim3(grid_last), dim3(block_size), 0, 0,
+                                   coarsest.fine_rows, coarsest.A.d_row_ptr, coarsest.A.d_col_idx, coarsest.A.d_values_f16,
+                                   coarsest.d_inv_diag_f16, coarsest.d_b_f16, (it == 0 ? (const __half*)nullptr : coarsest.d_x_f16),
+                                   coarsest.d_x_temp_f16, 0.67f);
+                std::swap(coarsest.d_x_f16, coarsest.d_x_temp_f16);
+            }
+        }
+
+        // 4. Upward sweep
+        for (int l = num_levels - 2; l >= 0; --l) {
+            auto& lvl = solver->levels[l];
+            int grid_l = std::min(std::max((lvl.fine_rows + block_size - 1) / block_size, 60), 480);
+            const __half* e_coarse = solver->levels[l + 1].d_x_f16;
+
+            hipLaunchKernelGGL(prolongation_add_fp16_kernel, dim3(grid_l), dim3(block_size), 0, 0,
+                               lvl.fine_rows, lvl.P.d_row_ptr, lvl.P.d_col_idx, lvl.P.d_values_f16,
+                               e_coarse, lvl.d_x_f16);
+
+            hipLaunchKernelGGL(jacobi_smooth_csr_fp16_kernel, dim3(grid_l), dim3(block_size), 0, 0,
+                               lvl.fine_rows, lvl.A.d_row_ptr, lvl.A.d_col_idx, lvl.A.d_values_f16,
+                               lvl.d_inv_diag_f16, lvl.d_b_f16, lvl.d_x_f16, lvl.d_x_temp_f16, 0.67f);
+
+            std::swap(lvl.d_x_f16, lvl.d_x_temp_f16);
+        }
+
+        // 5. Cast back to FP64 & post-equilibrate into d_z
+        hipLaunchKernelGGL(cast_half_to_double_kernel, dim3(grid_0), dim3(block_size), 0, 0,
+                           fine_size, solver->levels[0].d_x_f16, solver->levels[0].d_x_f64);
+        hipLaunchKernelGGL(vec_pointwise_mult_kernel, dim3(grid_0), dim3(block_size), 0, 0,
+                           fine_size, solver->levels[0].d_x_f64, solver->d_fine_inv_sqrt_d_f64, d_z);
+
+        HIP_CHECK(hipDeviceSynchronize());
+        return 0;
+    }
+
+    return -3; // Unknown precision mode
+}
+
+WNFEA_EXPORT int hip_amg_apply_vcycle(
+    void* handle,
+    const double* h_r,
+    double* h_z,
+    int precision_mode
+) {
+    if (!handle || !h_r || !h_z) return -1;
+    HipAMGSolver* solver = (HipAMGSolver*)handle;
+    int fine_size = solver->fine_size;
+
+    // Copy input residual to device
+    HIP_CHECK(hipMemcpy(solver->d_work_in_f64, h_r, fine_size * sizeof(double), hipMemcpyHostToDevice));
+
+    // Execute V-Cycle directly in GPU VRAM
+    int err = hip_amg_apply_vcycle_device(handle, solver->d_work_in_f64, solver->d_work_out_f64, precision_mode);
+    if (err != 0) return err;
+
+    // Copy solution vector back to host
+    HIP_CHECK(hipMemcpy(h_z, solver->d_work_out_f64, fine_size * sizeof(double), hipMemcpyDeviceToHost));
+    return 0;
+}
+
+WNFEA_EXPORT void hip_amg_destroy(void* handle) {
+    if (!handle) return;
+    HipAMGSolver* solver = (HipAMGSolver*)handle;
+    solver->free();
+    delete solver;
 }
 
 } // extern "C"

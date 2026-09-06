@@ -129,6 +129,38 @@ def _get_hip_lib():
             ]
             lib.hip_spmv_csr_solve.restype = ctypes.c_int
 
+            # Resident GPU AMG Preconditioner
+            lib.hip_amg_create.argtypes = [
+                ctypes.c_int, ctypes.c_int, ctypes.c_void_p
+            ]
+            lib.hip_amg_create.restype = ctypes.c_void_p
+
+            lib.hip_amg_set_level.argtypes = [
+                ctypes.c_void_p, ctypes.c_int, ctypes.c_int, ctypes.c_int,
+                ctypes.c_int, ctypes.c_void_p, ctypes.c_void_p, ctypes.c_void_p, ctypes.c_void_p,
+                ctypes.c_int, ctypes.c_void_p, ctypes.c_void_p, ctypes.c_void_p,
+                ctypes.c_int, ctypes.c_void_p, ctypes.c_void_p, ctypes.c_void_p,
+            ]
+            lib.hip_amg_set_level.restype = ctypes.c_int
+
+            lib.hip_amg_set_coarse_cholesky.argtypes = [
+                ctypes.c_void_p, ctypes.c_int, ctypes.c_void_p
+            ]
+            lib.hip_amg_set_coarse_cholesky.restype = ctypes.c_int
+
+            lib.hip_amg_apply_vcycle.argtypes = [
+                ctypes.c_void_p, ctypes.c_void_p, ctypes.c_void_p, ctypes.c_int
+            ]
+            lib.hip_amg_apply_vcycle.restype = ctypes.c_int
+
+            lib.hip_amg_apply_vcycle_device.argtypes = [
+                ctypes.c_void_p, ctypes.c_void_p, ctypes.c_void_p, ctypes.c_int
+            ]
+            lib.hip_amg_apply_vcycle_device.restype = ctypes.c_int
+
+            lib.hip_amg_destroy.argtypes = [ctypes.c_void_p]
+            lib.hip_amg_destroy.restype = None
+
             _HIP_LIB = lib
         except Exception:
             _HIP_LIB = None

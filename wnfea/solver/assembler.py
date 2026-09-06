@@ -282,6 +282,122 @@ def assemble_global_system(model: FEAModel) -> tuple[np.ndarray, np.ndarray]:
     return K, F
 
 
+def assemble_global_system_sparse(model: FEAModel):
+    """
+    Assemble the global stiffness matrix directly in scipy.sparse.csr_matrix format.
+    Suitable for large meshes (>100k DOFs) with minimal memory footprint.
+
+    Returns:
+        Tuple of (K_csr, F_full)
+    """
+    from scipy.sparse import coo_matrix, csr_matrix
+
+    n_nodes = len(model.mesh_nodes)
+    n_dofs = n_nodes * 6
+    F_full = np.zeros(n_dofs, dtype=np.float64)
+
+    rows = []
+    cols = []
+    vals = []
+
+    if model.mesh_elements is not None and len(model.mesh_elements) > 0:
+        for elem_id, (n1_idx, n2_idx) in enumerate(model.mesh_elements):
+            node1 = model.mesh_nodes[n1_idx]
+            node2 = model.mesh_nodes[n2_idx]
+
+            assignment = model.element_properties[elem_id]
+            mat = model.materials[assignment.material_name]
+            sec = model.sections[assignment.section_name]
+
+            Ke_local = build_element_stiffness_3d_beam(
+                node1, node2, mat.youngs_modulus, mat.shear_modulus,
+                sec.area, sec.iy, sec.iz, sec.j
+            )
+            T = build_transformation_matrix(node1, node2)
+            Ke_global = T.T @ Ke_local @ T
+
+            dofs = np.concatenate([
+                np.arange(n1_idx * 6, n1_idx * 6 + 6),
+                np.arange(n2_idx * 6, n2_idx * 6 + 6),
+            ])
+
+            r_grid, c_grid = np.meshgrid(dofs, dofs, indexing='ij')
+            rows.append(r_grid.ravel())
+            cols.append(c_grid.ravel())
+            vals.append(Ke_global.ravel())
+
+    if getattr(model, "solid_elements", None) is not None and len(model.solid_elements) > 0:
+        from ..elements.c3d10 import element_stiffness_c3d10
+        for elem_id, node_indices in enumerate(model.solid_elements):
+            coords = model.mesh_nodes[node_indices]
+            mat_name = model.solid_materials.get(elem_id) if hasattr(model, "solid_materials") else None
+            if not mat_name and model.materials:
+                mat_name = next(iter(model.materials))
+            mat = model.materials[mat_name]
+
+            Ke_solid = element_stiffness_c3d10(coords, mat.youngs_modulus, mat.poissons_ratio)
+            solid_dofs = []
+            for n_idx in node_indices:
+                solid_dofs.extend([n_idx * 6 + 0, n_idx * 6 + 1, n_idx * 6 + 2])
+            solid_dofs = np.array(solid_dofs, dtype=np.int32)
+            r_grid, c_grid = np.meshgrid(solid_dofs, solid_dofs, indexing='ij')
+            rows.append(r_grid.ravel())
+            cols.append(c_grid.ravel())
+            vals.append(Ke_solid.ravel())
+
+    if rows:
+        row_arr = np.concatenate(rows)
+        col_arr = np.concatenate(cols)
+        val_arr = np.concatenate(vals)
+        K_csr = coo_matrix((val_arr, (row_arr, col_arr)), shape=(n_dofs, n_dofs)).tocsr()
+    else:
+        K_csr = csr_matrix((n_dofs, n_dofs), dtype=np.float64)
+
+    # Loads
+    for load in model.loads:
+        mesh_node_id = model.geometry_to_mesh_node_map.get(load.node_id) if load.is_geometry_node else load.node_id
+        if mesh_node_id is not None and mesh_node_id < n_nodes:
+            F_full[mesh_node_id * 6 : mesh_node_id * 6 + 6] += load.force_vector
+
+    # Supports / BCs
+    from .dof_manager import DOFManager
+    dof_mgr = DOFManager(model)
+    fixed_dofs = []
+    for support in model.supports:
+        mesh_node_id = model.geometry_to_mesh_node_map.get(support.node_id) if support.is_geometry_node else support.node_id
+        if mesh_node_id is not None and mesh_node_id < n_nodes:
+            for local_dof, constraint in enumerate(support.constraints):
+                global_dof = dof_mgr.node_dof_to_global.get((mesh_node_id, local_dof))
+                if global_dof is not None and constraint.dof_type == DOFType.FIXED:
+                    fixed_dofs.append(global_dof)
+
+    if fixed_dofs:
+        fixed_set = set(fixed_dofs)
+        indptr = K_csr.indptr
+        indices = K_csr.indices
+        data = K_csr.data
+
+        is_fixed = np.zeros(n_dofs, dtype=bool)
+        is_fixed[list(fixed_set)] = True
+
+        row_indices = np.repeat(np.arange(n_dofs), np.diff(indptr))
+        mask_row = is_fixed[row_indices]
+        mask_col = is_fixed[indices]
+
+        # Zero out off-diagonal entries connected to fixed DOFs
+        mask_offdiag = (mask_row | mask_col) & (row_indices != indices)
+        data[mask_offdiag] = 0.0
+
+        # Set diagonal of fixed DOFs to 1.0
+        mask_diag = mask_row & (row_indices == indices)
+        data[mask_diag] = 1.0
+
+        F_full[is_fixed] = 0.0
+        K_csr.eliminate_zeros()
+
+    return K_csr, F_full
+
+
 def solve_linear_system(model: FEAModel) -> FEAModel:
     """
     Assemble and solve the global linear FEA system for beam, solid, or mixed models.

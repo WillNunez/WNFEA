@@ -22,7 +22,8 @@ from scipy.sparse.linalg import LinearOperator, splu, spsolve
 from scipy.linalg import cho_factor, cho_solve
 
 from ..model import FEAModel
-from .assembler import assemble_global_system
+from .assembler import assemble_global_system, assemble_global_system_sparse
+from .fast_kernels import _get_hip_lib
 
 
 def generate_rigid_body_modes(nodes: np.ndarray) -> np.ndarray:
@@ -96,21 +97,27 @@ def aggregate_beam_nodes(mesh_elements: np.ndarray, n_nodes: int, target_size: i
                     break
         aggregates.append(agg)
 
-    # Attach any lone singletons to adjacent aggregates if possible
+    # Attach any lone singletons to adjacent aggregates using O(1) neighbor lookup
+    node_to_agg = {}
     refined_aggregates: list[list[int]] = []
     for agg in aggregates:
-        if len(agg) == 1 and len(refined_aggregates) > 0:
+        if len(agg) == 1:
             node = agg[0]
-            # Try to attach to previous aggregate
             attached = False
-            for target_agg in refined_aggregates:
-                if any(node in adj[other] for other in target_agg):
-                    target_agg.append(node)
+            for neighbor in adj[node]:
+                target_agg_idx = node_to_agg.get(neighbor)
+                if target_agg_idx is not None and target_agg_idx < len(refined_aggregates):
+                    refined_aggregates[target_agg_idx].append(node)
+                    node_to_agg[node] = target_agg_idx
                     attached = True
                     break
             if not attached:
+                node_to_agg[node] = len(refined_aggregates)
                 refined_aggregates.append(agg)
         else:
+            new_idx = len(refined_aggregates)
+            for node in agg:
+                node_to_agg[node] = new_idx
             refined_aggregates.append(agg)
 
     return refined_aggregates
@@ -148,10 +155,15 @@ class BlockBeamAMGPreconditioner(LinearOperator):
         to working_dtype, and outputs are cast back.
     """
 
-    def __init__(self, model: FEAModel, max_levels: int = 3, coarse_size: int = 36,
-                 working_dtype: np.dtype = np.float64):
-        K_dense, _ = assemble_global_system(model)
-        A = csr_matrix(K_dense)
+    def __init__(self, model: FEAModel, A: csr_matrix | None = None, max_levels: int = 6, coarse_size: int = 36,
+                 working_dtype: np.dtype = np.float64, device: str = "cpu"):
+        if A is None:
+            A, _ = assemble_global_system_sparse(model)
+        elif not issparse(A):
+            A = csr_matrix(A)
+        else:
+            A = A.tocsr()
+
         n = A.shape[0]
         super().__init__(dtype=np.float64, shape=(n, n))
 
@@ -159,8 +171,10 @@ class BlockBeamAMGPreconditioner(LinearOperator):
         self.max_levels = max_levels
         self.coarse_size = coarse_size
         self.working_dtype = np.dtype(working_dtype)
+        self.device = device.lower()
         self.levels: list[AMGLevel] = []
         self.coarse_solver = None
+        self.gpu_handle = None
 
         # Symmetrically equilibrate system: improves condition number by orders of magnitude
         # and brings all vectors into O(1) range, making FP16 arithmetic immune to underflow.
@@ -170,6 +184,10 @@ class BlockBeamAMGPreconditioner(LinearOperator):
         A_equil = (D_inv @ A @ D_inv).tocsr()
 
         self._build_hierarchy(A_equil)
+
+        # Upload to AMD GPU if requested
+        if self.device in ("hip", "gpu"):
+            self._upload_to_gpu()
 
     def _build_hierarchy(self, A_fine: csr_matrix) -> None:
         """Construct the multi-level AMG hierarchy."""
@@ -187,12 +205,12 @@ class BlockBeamAMGPreconditioner(LinearOperator):
 
             # Aggregate physical nodes
             # If at fine level, use mesh element connectivity
+            agg_size = 4 if n_nodes > 1000 else 2
             if lvl == 0:
-                aggregates = aggregate_beam_nodes(self.model.mesh_elements, n_nodes, target_size=2)
+                aggregates = aggregate_beam_nodes(self.model.mesh_elements, n_nodes, target_size=agg_size)
             else:
-                # Coarser level simple pairwise grouping
-                aggregates = [[2 * i, 2 * i + 1] if 2 * i + 1 < n_nodes else [2 * i]
-                              for i in range((n_nodes + 1) // 2)]
+                aggregates = [[agg_size * i + k for k in range(agg_size) if agg_size * i + k < n_nodes]
+                              for i in range((n_nodes + agg_size - 1) // agg_size)]
 
             n_aggregates = len(aggregates)
             if n_aggregates >= n_nodes:
@@ -205,8 +223,11 @@ class BlockBeamAMGPreconditioner(LinearOperator):
                 sqrt_d = 1.0 / self.inv_sqrt_d[:6 * n_nodes]
                 B = sqrt_d[:, None] * B
 
-            # Build Block Prolongation Operator P: (6*n_nodes, 6*n_aggregates)
-            P_dense = np.zeros((6 * n_nodes, 6 * n_aggregates), dtype=np.float64)
+            # Build Block Prolongation Operator P: (6*n_nodes, 6*n_aggregates) in sparse format
+            from scipy.sparse import coo_matrix
+            p_rows = []
+            p_cols = []
+            p_vals = []
 
             for agg_idx, agg_nodes in enumerate(aggregates):
                 # Extract rows of B for this aggregate
@@ -217,11 +238,18 @@ class BlockBeamAMGPreconditioner(LinearOperator):
                 B_block = B[dofs_agg, :]
                 Q, _ = np.linalg.qr(B_block)
 
-                col_slice = slice(agg_idx * 6, agg_idx * 6 + 6)
-                P_dense[dofs_agg, col_slice] = Q[:, :6]
+                for i_local, r in enumerate(dofs_agg):
+                    for j in range(min(6, Q.shape[1])):
+                        p_rows.append(r)
+                        p_cols.append(agg_idx * 6 + j)
+                        p_vals.append(Q[i_local, j])
 
-            P = csr_matrix(P_dense)
-            R = P.T
+            P = coo_matrix(
+                (p_vals, (p_rows, p_cols)),
+                shape=(6 * n_nodes, 6 * n_aggregates),
+                dtype=np.float64
+            ).tocsr()
+            R = P.T.tocsr()
 
             # Galerkin coarse grid operator: A_coarse = R * A * P
             A_coarse = (R @ A_curr @ P).tocsr()
@@ -241,15 +269,21 @@ class BlockBeamAMGPreconditioner(LinearOperator):
 
         # Coarsest level direct solve setup (in working_dtype)
         A_coarsest = self.levels[-1].A
-        coarse_dense = A_coarsest.toarray().astype(self.working_dtype)
-        coarse_dense += 1e-12 * np.eye(coarse_dense.shape[0], dtype=self.working_dtype)
-        try:
-            # Cholesky in working_dtype
-            self.coarse_cho = cho_factor(coarse_dense.astype(np.float64), lower=True)
-            self.coarse_direct = True
-        except Exception:
+        n_coarsest = A_coarsest.shape[0]
+        if n_coarsest <= 1000:
+            coarse_dense = A_coarsest.toarray().astype(self.working_dtype)
+            coarse_dense += 1e-12 * np.eye(coarse_dense.shape[0], dtype=self.working_dtype)
+            try:
+                self.coarse_cho = cho_factor(coarse_dense.astype(np.float64), lower=True)
+                self.coarse_direct = True
+            except Exception:
+                self.coarse_lu = splu(A_coarsest.astype(np.float64).tocsc())
+                self.coarse_direct = False
+                self.coarse_cho = None
+        else:
             self.coarse_lu = splu(A_coarsest.astype(np.float64).tocsc())
             self.coarse_direct = False
+            self.coarse_cho = None
 
         # Tri-precision tracking
         self.use_tri_precision = False
@@ -257,6 +291,114 @@ class BlockBeamAMGPreconditioner(LinearOperator):
         self.last_precision_used = np.dtype(self.working_dtype).name
         self.fp16_vcycle_count = 0
         self.fp32_vcycle_count = 0
+
+    def _upload_to_gpu(self) -> None:
+        """Upload multi-level AMG hierarchy matrices and smoother diagonals to AMD GPU VRAM."""
+        hip_lib = _get_hip_lib()
+        if hip_lib is None:
+            self.device = "cpu"
+            self.gpu_handle = None
+            return
+
+        n_fine = self.shape[0]
+        n_levels = len(self.levels)
+        inv_sqrt_d_contig = np.ascontiguousarray(self.inv_sqrt_d, dtype=np.float64)
+
+        handle = hip_lib.hip_amg_create(
+            n_levels, n_fine, inv_sqrt_d_contig.ctypes.data
+        )
+        if not handle:
+            self.device = "cpu"
+            self.gpu_handle = None
+            return
+        self.gpu_handle = handle
+
+        self._gpu_buffers = [inv_sqrt_d_contig]
+
+        for lvl_idx, level in enumerate(self.levels):
+            A = level.A.tocsr()
+            a_row_ptr = np.ascontiguousarray(A.indptr, dtype=np.int32)
+            a_col_idx = np.ascontiguousarray(A.indices, dtype=np.int32)
+            a_values = np.ascontiguousarray(A.data, dtype=np.float64)
+            inv_diag = np.ascontiguousarray(level.inv_diag, dtype=np.float64)
+            self._gpu_buffers.extend([a_row_ptr, a_col_idx, a_values, inv_diag])
+
+            fine_rows = A.shape[0]
+            coarse_rows = level.P.shape[1] if level.P is not None else 0
+
+            if level.P is not None:
+                P = level.P.tocsr()
+                p_row_ptr = np.ascontiguousarray(P.indptr, dtype=np.int32)
+                p_col_idx = np.ascontiguousarray(P.indices, dtype=np.int32)
+                p_values = np.ascontiguousarray(P.data, dtype=np.float64)
+                p_nnz = P.nnz
+                self._gpu_buffers.extend([p_row_ptr, p_col_idx, p_values])
+                p_row_data = p_row_ptr.ctypes.data
+                p_col_data = p_col_idx.ctypes.data
+                p_val_data = p_values.ctypes.data
+            else:
+                p_nnz = 0
+                p_row_data = None
+                p_col_data = None
+                p_val_data = None
+
+            if level.R is not None:
+                R = level.R.tocsr()
+                r_row_ptr = np.ascontiguousarray(R.indptr, dtype=np.int32)
+                r_col_idx = np.ascontiguousarray(R.indices, dtype=np.int32)
+                r_values = np.ascontiguousarray(R.data, dtype=np.float64)
+                r_nnz = R.nnz
+                self._gpu_buffers.extend([r_row_ptr, r_col_idx, r_values])
+                r_row_data = r_row_ptr.ctypes.data
+                r_col_data = r_col_idx.ctypes.data
+                r_val_data = r_values.ctypes.data
+            else:
+                r_nnz = 0
+                r_row_data = None
+                r_col_data = None
+                r_val_data = None
+
+            err = hip_lib.hip_amg_set_level(
+                self.gpu_handle,
+                lvl_idx,
+                fine_rows,
+                coarse_rows,
+                A.nnz,
+                a_row_ptr.ctypes.data,
+                a_col_idx.ctypes.data,
+                a_values.ctypes.data,
+                inv_diag.ctypes.data,
+                p_nnz,
+                p_row_data,
+                p_col_data,
+                p_val_data,
+                r_nnz,
+                r_row_data,
+                r_col_data,
+                r_val_data,
+            )
+            if err != 0:
+                print(f"[WARN] hip_amg_set_level failed at level {lvl_idx} with code {err}")
+
+        # Set coarse Cholesky factor
+        if hasattr(self, "coarse_cho") and self.coarse_cho is not None:
+            c = self.coarse_cho[0]
+            L = np.tril(c)
+            L_dense = np.ascontiguousarray(L, dtype=np.float64)
+            self._gpu_buffers.append(L_dense)
+            hip_lib.hip_amg_set_coarse_cholesky(
+                self.gpu_handle, L_dense.shape[0], L_dense.ctypes.data
+            )
+
+    def __del__(self):
+        if getattr(self, "gpu_handle", None) is not None:
+            hip_lib = _get_hip_lib()
+            if hip_lib is not None:
+                try:
+                    hip_lib.hip_amg_destroy(self.gpu_handle)
+                except Exception:
+                    pass
+            self.gpu_handle = None
 
     def enable_tri_precision(self, switch_tol: float = 1e-2) -> None:
         """Enable adaptive FP16 early preconditioning with automatic switch to FP32."""
@@ -360,6 +502,28 @@ class BlockBeamAMGPreconditioner(LinearOperator):
         - If current_res_rel > switch_tol, executes V-cycle in FP16 (with dynamic range protection).
         - When current_res_rel <= switch_tol, transitions to working_dtype (FP32).
         """
+        if self.gpu_handle is not None:
+            hip_lib = _get_hip_lib()
+            if hip_lib is not None:
+                if self.use_tri_precision and current_res_rel is not None and current_res_rel > self.switch_tol:
+                    prec = 2  # FP16
+                    self.last_precision_used = "float16"
+                    self.fp16_vcycle_count += 1
+                elif self.working_dtype == np.float32:
+                    prec = 1  # FP32
+                    self.last_precision_used = "float32"
+                    self.fp32_vcycle_count += 1
+                else:
+                    prec = 0  # FP64
+                    self.last_precision_used = "float64"
+
+                r_contig = np.ascontiguousarray(r, dtype=np.float64)
+                z = np.zeros_like(r_contig)
+                err = hip_lib.hip_amg_apply_vcycle(self.gpu_handle, r_contig.ctypes.data, z.ctypes.data, prec)
+                if err == 0:
+                    return z
+
+        # CPU fallback:
         if self.use_tri_precision and current_res_rel is not None and current_res_rel > self.switch_tol:
             r_work = np.asarray(r, dtype=np.float32)
             r_equil = (self.inv_sqrt_d.astype(np.float32) * r_work)
@@ -386,6 +550,16 @@ class BlockBeamAMGPreconditioner(LinearOperator):
         Input r may be in any precision. It is cast to working_dtype for the
         V-cycle, and the result is cast back to float64 for the caller.
         """
+        if self.gpu_handle is not None:
+            hip_lib = _get_hip_lib()
+            if hip_lib is not None:
+                prec = 1 if self.working_dtype == np.float32 else 0
+                r_contig = np.ascontiguousarray(r, dtype=np.float64)
+                z = np.zeros_like(r_contig)
+                err = hip_lib.hip_amg_apply_vcycle(self.gpu_handle, r_contig.ctypes.data, z.ctypes.data, prec)
+                if err == 0:
+                    return z
+
         r_work = np.asarray(r, dtype=self.working_dtype)
         r_equil = (self.inv_sqrt_d.astype(self.working_dtype) * r_work)
         z_equil = self._v_cycle(0, r_equil)
