@@ -12,4 +12,5 @@ graphify-out/
 *.obj
 *.lib
 *.bin
+*.exp
 

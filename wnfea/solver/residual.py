@@ -92,66 +92,34 @@ def get_boundary_constraints(
     return np.array(c_dofs, dtype=np.int64), np.array(p_vals, dtype=np.float64)
 
 
-def compute_internal_forces(model: FEAModel, U_full: np.ndarray) -> np.ndarray:
+from .fast_kernels import compute_internal_forces_fast
+
+
+def compute_internal_forces(
+    model: FEAModel,
+    U_full: np.ndarray,
+    device: str = "cpu",
+    block_size: int = 0,
+    grid_size: int = 0,
+) -> np.ndarray:
     """
     Compute the global internal nodal force vector F_int(U) of shape (N*6,).
-    Evaluated element-by-element without assembling any global matrix.
+    Evaluated with coalesced memory access using native HIP GPU kernels,
+    native C++/AVX kernels, or batched SIMD arrays without assembling any global matrix.
 
     Args:
         model: FEAModel with mesh and properties.
         U_full: Full nodal displacement/rotation vector (N*6,).
+        device: "cpu", "hip", or "gpu".
+        block_size: Custom block size (0 = auto-tuned).
+        grid_size: Custom grid size (0 = auto-tuned).
 
     Returns:
         F_int: Full global internal force vector (N*6,).
     """
-    n_nodes = len(model.mesh_nodes)
-    F_int = np.zeros(n_nodes * 6, dtype=np.float64)
-    nodes = model.mesh_nodes
-
-    # 1. 3D Beams
-    if model.mesh_elements is not None and len(model.mesh_elements) > 0:
-        for elem_id, (n1_idx, n2_idx) in enumerate(model.mesh_elements):
-            node1 = nodes[n1_idx]
-            node2 = nodes[n2_idx]
-
-            dofs1 = slice(n1_idx * 6, n1_idx * 6 + 6)
-            dofs2 = slice(n2_idx * 6, n2_idx * 6 + 6)
-            u_e = np.concatenate([U_full[dofs1], U_full[dofs2]])
-
-            assignment = model.element_properties[elem_id]
-            mat = model.materials[assignment.material_name]
-            sec = model.sections[assignment.section_name]
-
-            f_e = compute_corotational_element_forces(
-                node1, node2, u_e,
-                mat.youngs_modulus, mat.shear_modulus,
-                sec.area, sec.iy, sec.iz, sec.j,
-            )
-
-            F_int[dofs1] += f_e[0:6]
-            F_int[dofs2] += f_e[6:12]
-
-    # 2. C3D10 10-Node Quadratic Tetrahedra
-    if getattr(model, "solid_elements", None) is not None and len(model.solid_elements) > 0:
-        from ..elements.c3d10 import element_internal_forces_c3d10
-        for elem_id, node_indices in enumerate(model.solid_elements):
-            coords = nodes[node_indices]
-            u_solid = np.zeros(30, dtype=np.float64)
-            for i, n_idx in enumerate(node_indices):
-                u_solid[3 * i : 3 * i + 3] = U_full[n_idx * 6 : n_idx * 6 + 3]
-
-            mat_name = model.solid_materials.get(elem_id)
-            if not mat_name and model.materials:
-                mat_name = next(iter(model.materials))
-            mat = model.materials[mat_name]
-
-            f_s = element_internal_forces_c3d10(
-                coords, u_solid, mat.youngs_modulus, mat.poissons_ratio
-            )
-            for i, n_idx in enumerate(node_indices):
-                F_int[n_idx * 6 : n_idx * 6 + 3] += f_s[3 * i : 3 * i + 3]
-
-    return F_int
+    return compute_internal_forces_fast(
+        model, U_full, device=device, block_size=block_size, grid_size=grid_size
+    )
 
 
 def compute_equilibrium_residual(
@@ -162,6 +130,7 @@ def compute_equilibrium_residual(
     constrained_dofs: np.ndarray | None = None,
     prescribed_vals: np.ndarray | None = None,
     dof_mgr: DOFManager | None = None,
+    device: str = "cpu",
 ) -> np.ndarray:
     """
     Compute the equilibrium residual vector:
@@ -182,7 +151,7 @@ def compute_equilibrium_residual(
         U_full = U
 
     # Element internal forces
-    F_int_full = compute_internal_forces(model, U_full)
+    F_int_full = compute_internal_forces(model, U_full, device=device)
 
     # Kinematic condensation: full nodal forces -> active independent DOFs
     F_int_active = dof_mgr.condense_forces(F_int_full)
