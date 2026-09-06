@@ -76,7 +76,7 @@ class TestResult:
 # Test 1: Cantilever Beam — Analytical Validation
 # ═══════════════════════════════════════════════════════════════════
 
-def test_cantilever_beam(tr: TestResult):
+def test_cantilever_beam(tr: TestResult, device: str = "cpu"):
     print("\n" + "-" * 60)
     print("TEST 1: Cantilever Beam -- Analytical Validation")
     print("-" * 60)
@@ -127,7 +127,7 @@ def test_cantilever_beam(tr: TestResult):
 
     # Solve
     solver = BeamSolver()
-    solver.solve(model)
+    solver.solve(model, device=device)
     tr.check(model.displacements is not None, "Displacements computed")
     tr.check(model.stage == PipelineStage.SOLVED, "Stage after solve = SOLVED")
 
@@ -172,7 +172,7 @@ def test_cantilever_beam(tr: TestResult):
 # Test 2: Tetrahedral Truss — STEP File Integration
 # ═══════════════════════════════════════════════════════════════════
 
-def test_truss_from_step(tr: TestResult):
+def test_truss_from_step(tr: TestResult, device: str = "cpu"):
     print("\n" + "-" * 60)
     print("TEST 2: Tetrahedral Truss -- STEP File Integration")
     print("-" * 60)
@@ -239,7 +239,7 @@ def test_truss_from_step(tr: TestResult):
     # Stage 5: Solve
     solver = BeamSolver()
     try:
-        solver.solve(model)
+        solver.solve(model, device=device)
         solve_ok = True
     except Exception as e:
         solve_ok = False
@@ -282,14 +282,19 @@ def test_truss_from_step(tr: TestResult):
 # ═══════════════════════════════════════════════════════════════════
 
 if __name__ == "__main__":
+    import argparse
+    parser = argparse.ArgumentParser(description="WNFEA Full Pipeline Test Suite")
+    parser.add_argument("-d", "--device", type=str, default="cpu", help="Solver device (cpu, hip, etc.)")
+    args = parser.parse_args()
+
     print("=" * 60)
     print("         WNFEA -- Full Pipeline Test Suite")
     print("=" * 60)
 
     tr = TestResult()
 
-    test_cantilever_beam(tr)
-    test_truss_from_step(tr)
+    test_cantilever_beam(tr, device=args.device)
+    test_truss_from_step(tr, device=args.device)
 
     all_ok = tr.summary()
     sys.exit(0 if all_ok else 1)

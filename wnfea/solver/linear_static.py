@@ -11,7 +11,7 @@ from ..model import FEAModel
 from .assembler import assemble_global_system
 
 
-def solve_linear_static(model: FEAModel) -> np.ndarray:
+def solve_linear_static(model: FEAModel, device: str = "cpu") -> np.ndarray:
     """
     Solve the linear static FEA problem: K * U = F.
 
@@ -20,6 +20,7 @@ def solve_linear_static(model: FEAModel) -> np.ndarray:
 
     Args:
         model: FEAModel with mesh, properties, supports, and loads defined.
+        device: MFEM device selection (e.g. "cpu" or "hip").
 
     Returns:
         The displacement vector U (also stored in model.displacements).
@@ -40,7 +41,8 @@ def solve_linear_static(model: FEAModel) -> np.ndarray:
             "Check boundary conditions (model may be under-constrained)."
         )
 
-    U = solve(K, F)
+    from .mfem_solver_wrapper import solve_with_mfem
+    U = solve_with_mfem(K, F, device=device)
     model.displacements = U
 
     return U

@@ -1,7 +1,7 @@
 import numpy as np
 import matplotlib.pyplot as plt
 from mpl_toolkits.mplot3d.art3d import Poly3DCollection
-from scipy.linalg import solve
+from wnfea.solver.mfem_solver_wrapper import solve_with_mfem
 
 # --- 1. Geometry and Properties ---
 nodes_3d = np.array([
@@ -248,7 +248,7 @@ for dof in fixed_dofs:
     K[dof, :] = 0; K[:, dof] = 0; K[dof, dof] = 1; F[dof] = 0
 
 # Solve linear system
-U = solve(K, F)
+U = solve_with_mfem(K, F)
 print("System Solved Successfully.\")")
 
 # Calculate stress results for elements

@@ -41,7 +41,7 @@ class BeamSolver:
         # model.displacements is now populated
     """
 
-    def solve(self, model: FEAModel) -> None:
+    def solve(self, model: FEAModel, device: str = "cpu") -> None:
         """
         Assemble and solve K·U = F.
 
@@ -157,9 +157,10 @@ class BeamSolver:
         # 4. Solve  K · U = F
         # ------------------------------------------------------------------
         try:
-            U = scipy_solve(K, F)
-        except np.linalg.LinAlgError as exc:
-            raise SolverError(f"Stiffness matrix is singular: {exc}") from exc
+            from .mfem_solver_wrapper import solve_with_mfem
+            U = solve_with_mfem(K, F, device=device)
+        except Exception as exc:
+            raise SolverError(f"MFEM solver failed: {exc}") from exc
 
         model.displacements = U
 

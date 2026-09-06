@@ -4,7 +4,7 @@ import numpy as np
 import matplotlib.pyplot as plt
 from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg
 from mpl_toolkits.mplot3d.art3d import Poly3DCollection
-from scipy.linalg import solve
+from wnfea.solver.mfem_solver_wrapper import solve_with_mfem
 
 ctk.set_appearance_mode("dark")
 ctk.set_default_color_theme("blue")
@@ -432,7 +432,7 @@ class FEAEngineApp(ctk.CTk):
         for dof in fixed_dofs:
             K[dof, :] = 0; K[:, dof] = 0; K[dof, dof] = 1; F[dof] = 0
             
-        U = solve(K, F)
+        U = solve_with_mfem(K, F)
         
         # 4. Stress Post-Processing
         element_results = {}
