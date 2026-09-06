@@ -109,9 +109,30 @@ int main(int argc, char *argv[])
     cg.SetPrintLevel(1);
     cg.SetOperator(K);
 
-    // Set up the Jacobi preconditioner (DSmoother)
+#ifdef MFEM_USE_MPI
+    // Hypre BoomerAMG GPU-Accelerated Preconditioner
+    // Offloaded to AMD Radeon RX 7800 XT (gfx1101) via HIP
+    HypreParMatrix *A_par = new HypreParMatrix(MPI_COMM_WORLD, nrows, ...);
+    HypreBoomerAMG *amg = new HypreBoomerAMG(*A_par);
+
+    // 1. Parallel Modified Independent Set (PMIS) coarsening
+    amg->SetCoarseningType(8);
+
+    // 2. Extended+i interpolation (GPU/SIMD optimized)
+    amg->SetInterpolationType(14);
+
+    // 3. Truncate deep graph hierarchy
+    amg->SetMaxLevels(4);
+
+    // 4. Aggressive weak connection dropping
+    amg->SetMaxRowSum(0.9);
+
+    cg.SetPreconditioner(*amg);
+#else
+    // Serial/Threaded HIP device fallback: Jacobi diagonal smoother
     DSmoother prec(K);
     cg.SetPreconditioner(prec);
+#endif
 
     // 6. Solve the system
     cout << "Solving system of equations..." << endl;
