@@ -19,6 +19,10 @@ from .boundary.conditions import (
 )
 from .mesh.beam_mesher import BeamMesher, MeshError
 from .solver.beam_solver import BeamSolver, SolverError
+from .solver.linear_static import solve_linear_static
+from .solver.nonlinear_solver import solve_nonlinear_jfnk, NonLinearConvergenceError
+from .solver.jfnk_operator import MatrixFreeJFNKOperator
+from .solver.amg_preconditioner import BlockBeamAMGPreconditioner
 from .results.post_processor import PostProcessor, PostProcessError
 from .results.result_data import StressPoint, ElementResult, ModelResults
 
@@ -39,8 +43,11 @@ __all__ = [
     # Mesh
     "BeamMesher", "MeshError",
     # Solver
-    "BeamSolver", "SolverError",
+    "BeamSolver", "SolverError", "solve_linear_static",
+    "solve_nonlinear_jfnk", "NonLinearConvergenceError",
+    "MatrixFreeJFNKOperator", "BlockBeamAMGPreconditioner",
     # Results
     "PostProcessor", "PostProcessError",
     "StressPoint", "ElementResult", "ModelResults",
 ]
+
