@@ -177,6 +177,9 @@ class FEAModel:
         """Clear mesh and all downstream data."""
         self.mesh_nodes = None
         self.mesh_elements = None
+        self.solid_elements = None
+        self.solid_materials.clear()
+        self.couplings.clear()
         self.element_properties.clear()
         self.geometry_to_mesh_node_map.clear()
         # Keep geometry-node BCs but clear mesh-node BCs
@@ -196,7 +199,9 @@ class FEAModel:
         lines.append(f"  Materials: {len(self.materials)}, Sections: {len(self.sections)}")
         lines.append(f"  Assignments: {len(self.edge_assignments)} / {len(self.geometry_edges)} edges")
         if self.mesh_nodes is not None:
-            lines.append(f"  Mesh: {len(self.mesh_nodes)} nodes, {len(self.mesh_elements)} elements")
+            n_beams = len(self.mesh_elements) if self.mesh_elements is not None else 0
+            n_solids = len(self.solid_elements) if self.solid_elements is not None else 0
+            lines.append(f"  Mesh: {len(self.mesh_nodes)} nodes, {n_beams} beam elements, {n_solids} solid elements")
         else:
             lines.append(f"  Mesh: not generated")
         lines.append(f"  BCs: {len(self.supports)} supports, {len(self.loads)} loads")

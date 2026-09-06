@@ -280,3 +280,21 @@ def assemble_global_system(model: FEAModel) -> tuple[np.ndarray, np.ndarray]:
                 F[global_dof] = constraint.value
 
     return K, F
+
+
+def solve_linear_system(model: FEAModel) -> FEAModel:
+    """
+    Assemble and solve the global linear FEA system for beam, solid, or mixed models.
+    Direct elimination ensures zero singular zero-rows for pure solid nodes and
+    rigid kinematic multi-point interfaces.
+
+    Populates:
+      - model.displacements: full nodal displacements array (N*6,)
+    """
+    from .dof_manager import DOFManager
+    dof_mgr = DOFManager(model)
+    K, F = assemble_global_system(model)
+    u_active = np.linalg.solve(K, F)
+    model.displacements = dof_mgr.expand_displacements(u_active)
+    return model
+
