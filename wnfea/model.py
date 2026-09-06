@@ -64,6 +64,11 @@ class FEAModel:
     mesh_nodes: np.ndarray | None = None       # shape (N, 3)
     mesh_elements: np.ndarray | None = None    # shape (E, 2)
     element_properties: dict[int, PropertyAssignment] = field(default_factory=dict)
+    # Solid continuum elements (e.g. C3D10)
+    solid_elements: np.ndarray | None = None   # shape (M, 10)
+    solid_materials: dict[int, str] = field(default_factory=dict)  # elem_id -> material_name
+    # Multi-point kinematic couplings (e.g. beam to solid)
+    couplings: list = field(default_factory=list)
     # Maps geometry node IDs → mesh node IDs for BC propagation
     geometry_to_mesh_node_map: dict[int, int] = field(default_factory=dict)
 
@@ -84,7 +89,7 @@ class FEAModel:
             return PipelineStage.SOLVED
         if self.supports or self.loads:
             return PipelineStage.BCS_DEFINED
-        if self.mesh_nodes is not None and self.mesh_elements is not None:
+        if self.mesh_nodes is not None and (self.mesh_elements is not None or self.solid_elements is not None):
             return PipelineStage.MESHED
         if self.edge_assignments:
             return PipelineStage.PROPERTIES_ASSIGNED
@@ -125,7 +130,7 @@ class FEAModel:
     def validate_for_solving(self) -> list[str]:
         """Check that mesh and BCs are defined before solving."""
         errors = []
-        if self.mesh_nodes is None or self.mesh_elements is None:
+        if self.mesh_nodes is None or (self.mesh_elements is None and self.solid_elements is None):
             errors.append("No mesh generated. Run the mesher first.")
         if not self.supports:
             errors.append("No supports defined. Add at least one boundary condition.")

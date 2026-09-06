@@ -170,41 +170,60 @@ def assemble_global_system(model: FEAModel) -> tuple[np.ndarray, np.ndarray]:
         raise ValueError("Cannot assemble:\n  " + "\n  ".join(errors))
 
     n_nodes = len(model.mesh_nodes)
-    n_dofs = n_nodes * 6
-    K = np.zeros((n_dofs, n_dofs))
-    F = np.zeros(n_dofs)
+    K_full = np.zeros((n_nodes * 6, n_nodes * 6), dtype=np.float64)
+    F_full = np.zeros(n_nodes * 6, dtype=np.float64)
 
-    # Assemble element stiffness matrices
-    for elem_id, (n1_idx, n2_idx) in enumerate(model.mesh_elements):
-        node1 = model.mesh_nodes[n1_idx]
-        node2 = model.mesh_nodes[n2_idx]
+    # 1. Assemble beam elements
+    if model.mesh_elements is not None:
+        for elem_id, (n1_idx, n2_idx) in enumerate(model.mesh_elements):
+            node1 = model.mesh_nodes[n1_idx]
+            node2 = model.mesh_nodes[n2_idx]
 
-        # Get element properties
-        assignment = model.element_properties[elem_id]
-        mat = model.materials[assignment.material_name]
-        sec = model.sections[assignment.section_name]
+            # Get element properties
+            assignment = model.element_properties[elem_id]
+            mat = model.materials[assignment.material_name]
+            sec = model.sections[assignment.section_name]
 
-        E = mat.youngs_modulus
-        G = mat.shear_modulus
+            E = mat.youngs_modulus
+            G = mat.shear_modulus
 
-        # Build local stiffness and transform to global
-        Ke_local = build_element_stiffness_3d_beam(
-            node1, node2, E, G, sec.area, sec.iy, sec.iz, sec.j
-        )
-        T = build_transformation_matrix(node1, node2)
-        Ke_global = T.T @ Ke_local @ T
+            Ke_local = build_element_stiffness_3d_beam(
+                node1, node2, E, G, sec.area, sec.iy, sec.iz, sec.j
+            )
+            T = build_transformation_matrix(node1, node2)
+            Ke_global = T.T @ Ke_local @ T
 
-        # Global DOF indices
-        dofs = np.concatenate([
-            np.arange(n1_idx * 6, n1_idx * 6 + 6),
-            np.arange(n2_idx * 6, n2_idx * 6 + 6),
-        ])
+            dofs = np.concatenate([
+                np.arange(n1_idx * 6, n1_idx * 6 + 6),
+                np.arange(n2_idx * 6, n2_idx * 6 + 6),
+            ])
 
-        for i in range(12):
-            for j in range(12):
-                K[dofs[i], dofs[j]] += Ke_global[i, j]
+            for i in range(12):
+                for j in range(12):
+                    K_full[dofs[i], dofs[j]] += Ke_global[i, j]
 
-    # Apply loads
+    # 2. Assemble C3D10 solid elements
+    if getattr(model, "solid_elements", None) is not None and len(model.solid_elements) > 0:
+        from ..elements.c3d10 import element_stiffness_c3d10
+        for elem_id, node_indices in enumerate(model.solid_elements):
+            coords = model.mesh_nodes[node_indices]
+            mat_name = model.solid_materials.get(elem_id)
+            if not mat_name and model.materials:
+                mat_name = next(iter(model.materials))
+            mat = model.materials[mat_name]
+
+            Ke_solid = element_stiffness_c3d10(coords, mat.youngs_modulus, mat.poissons_ratio)
+
+            # Map 30 DOFs (3 DOFs per node) to K_full (6 DOFs per node)
+            solid_dofs = []
+            for n_idx in node_indices:
+                solid_dofs.extend([n_idx * 6 + 0, n_idx * 6 + 1, n_idx * 6 + 2])
+
+            for i in range(30):
+                for j in range(30):
+                    K_full[solid_dofs[i], solid_dofs[j]] += Ke_solid[i, j]
+
+    # 3. Apply loads to F_full
     for load in model.loads:
         if load.is_geometry_node:
             mesh_node_id = model.geometry_to_mesh_node_map.get(load.node_id)
@@ -218,9 +237,21 @@ def assemble_global_system(model: FEAModel) -> tuple[np.ndarray, np.ndarray]:
 
         fv = load.force_vector
         for i in range(6):
-            F[mesh_node_id * 6 + i] += fv[i]
+            F_full[mesh_node_id * 6 + i] += fv[i]
 
-    # Apply boundary conditions (supports)
+    # 4. Direct Elimination via DOFManager
+    from .dof_manager import DOFManager
+    dof_mgr = DOFManager(model)
+
+    if dof_mgr.total_active_dofs < n_nodes * 6:
+        T_proj = dof_mgr.build_projection_matrix()
+        K = T_proj.T @ K_full @ T_proj
+        F = T_proj.T @ F_full
+    else:
+        K = K_full
+        F = F_full
+
+    # 5. Apply boundary conditions in active DOF space
     for support in model.supports:
         if support.is_geometry_node:
             mesh_node_id = model.geometry_to_mesh_node_map.get(support.node_id)
@@ -233,7 +264,10 @@ def assemble_global_system(model: FEAModel) -> tuple[np.ndarray, np.ndarray]:
             continue
 
         for local_dof, constraint in enumerate(support.constraints):
-            global_dof = mesh_node_id * 6 + local_dof
+            global_dof = dof_mgr.node_dof_to_global.get((mesh_node_id, local_dof))
+            if global_dof is None:
+                continue
+
             if constraint.dof_type == DOFType.FIXED:
                 K[global_dof, :] = 0.0
                 K[:, global_dof] = 0.0

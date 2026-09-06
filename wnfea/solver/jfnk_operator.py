@@ -31,15 +31,18 @@ class MatrixFreeJFNKOperator(LinearOperator):
         F_ext: np.ndarray,
         load_factor: float = 1.0,
         R_current: np.ndarray | None = None,
+        dof_mgr: DOFManager | None = None,
         eps_scale: float = 1.4901161193847656e-8,  # sqrt(eps_mach) for float64
     ):
+        from .dof_manager import DOFManager
         self.model = model
+        self.dof_mgr = dof_mgr if dof_mgr is not None else DOFManager(model)
         self.U = np.asarray(U, dtype=np.float64)
         self.F_ext = np.asarray(F_ext, dtype=np.float64)
         self.load_factor = float(load_factor)
         self.eps_scale = float(eps_scale)
 
-        self.constrained_dofs, self.prescribed_vals = get_boundary_constraints(model)
+        self.constrained_dofs, self.prescribed_vals = get_boundary_constraints(model, self.dof_mgr)
         self.is_constrained = np.zeros(len(self.U), dtype=bool)
         if len(self.constrained_dofs) > 0:
             self.is_constrained[self.constrained_dofs] = True
@@ -49,7 +52,8 @@ class MatrixFreeJFNKOperator(LinearOperator):
         else:
             self.R_current = compute_equilibrium_residual(
                 self.model, self.U, self.F_ext, self.load_factor,
-                self.constrained_dofs, self.prescribed_vals
+                self.constrained_dofs, self.prescribed_vals,
+                dof_mgr=self.dof_mgr
             )
 
         n = len(self.U)
@@ -63,7 +67,8 @@ class MatrixFreeJFNKOperator(LinearOperator):
         else:
             self.R_current = compute_equilibrium_residual(
                 self.model, self.U, self.F_ext, self.load_factor,
-                self.constrained_dofs, self.prescribed_vals
+                self.constrained_dofs, self.prescribed_vals,
+                dof_mgr=self.dof_mgr
             )
 
     def _matvec(self, v: np.ndarray) -> np.ndarray:
@@ -86,7 +91,8 @@ class MatrixFreeJFNKOperator(LinearOperator):
 
         R_pert = compute_equilibrium_residual(
             self.model, U_pert, self.F_ext, self.load_factor,
-            self.constrained_dofs, self.prescribed_vals
+            self.constrained_dofs, self.prescribed_vals,
+            dof_mgr=self.dof_mgr
         )
 
         w = (R_pert - self.R_current) / eps

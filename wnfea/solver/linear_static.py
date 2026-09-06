@@ -41,8 +41,12 @@ def solve_linear_static(model: FEAModel, device: str = "cpu") -> np.ndarray:
             "Check boundary conditions (model may be under-constrained)."
         )
 
-    from .mfem_solver_wrapper import solve_with_mfem
-    U = solve_with_mfem(K, F, device=device)
-    model.displacements = U
+    from .dof_manager import DOFManager
+    dof_mgr = DOFManager(model)
 
-    return U
+    from .mfem_solver_wrapper import solve_with_mfem
+    U_active = solve_with_mfem(K, F, device=device)
+    U_full = dof_mgr.expand_displacements(U_active)
+    model.displacements = U_full
+
+    return U_full

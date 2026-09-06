@@ -125,19 +125,25 @@ def solve_nonlinear_jfnk(
     if errors:
         raise ValueError("Cannot solve model:\n  " + "\n  ".join(errors))
 
-    n_nodes = len(model.mesh_nodes)
-    n_dofs = n_nodes * 6
+    from .dof_manager import DOFManager
+    dof_mgr = DOFManager(model)
 
-    # Initial state
+    n_nodes = len(model.mesh_nodes)
+    n_dofs = dof_mgr.total_active_dofs
+
+    # Initial state in active DOF space
     U = np.zeros(n_dofs, dtype=np.float64)
-    F_ext = build_external_force_vector(model)
-    constrained_dofs, prescribed_vals = get_boundary_constraints(model)
+    F_ext = build_external_force_vector(model, dof_mgr)
+    constrained_dofs, prescribed_vals = get_boundary_constraints(model, dof_mgr)
 
     if verbose:
         print("=" * 65)
         print("  WNFEA Matrix-Free JFNK Non-Linear Solver (AMG-Preconditioned)")
         print("=" * 65)
-        print(f"  DOFs: {n_dofs} ({n_nodes} nodes, {len(model.mesh_elements)} elements)")
+        n_elems = len(model.mesh_elements) if model.mesh_elements is not None else 0
+        if getattr(model, "solid_elements", None) is not None:
+            n_elems += len(model.solid_elements)
+        print(f"  Active DOFs: {n_dofs} ({n_nodes} nodes, {n_elems} elements)")
         print(f"  Load steps: {n_load_steps}, Max Newton iters: {max_newton_iter}")
         print(f"  Preconditioner: {'Block Beam AMG' if use_amg else 'None (Diagonal)'}")
         print("-" * 65)
@@ -163,7 +169,8 @@ def solve_nonlinear_jfnk(
         # Compute initial residual for this load step
         R = compute_equilibrium_residual(
             model, U, F_ext, load_factor=lam,
-            constrained_dofs=constrained_dofs, prescribed_vals=prescribed_vals
+            constrained_dofs=constrained_dofs, prescribed_vals=prescribed_vals,
+            dof_mgr=dof_mgr
         )
         res_norm0 = float(np.linalg.norm(R))
         prev_res_norm = res_norm0
@@ -190,7 +197,7 @@ def solve_nonlinear_jfnk(
 
             # Construct Matrix-Free JFNK Operator around current state U
             J_op = MatrixFreeJFNKOperator(
-                model, U, F_ext, load_factor=lam, R_current=R
+                model, U, F_ext, load_factor=lam, R_current=R, dof_mgr=dof_mgr
             )
 
             # Solve J(U) * delta_U = -R via PCG
@@ -206,7 +213,8 @@ def solve_nonlinear_jfnk(
             U_trial = U + alpha * delta_U
             R_trial = compute_equilibrium_residual(
                 model, U_trial, F_ext, load_factor=lam,
-                constrained_dofs=constrained_dofs, prescribed_vals=prescribed_vals
+                constrained_dofs=constrained_dofs, prescribed_vals=prescribed_vals,
+                dof_mgr=dof_mgr
             )
             trial_norm = float(np.linalg.norm(R_trial))
 
@@ -217,7 +225,8 @@ def solve_nonlinear_jfnk(
                 U_trial = U + alpha * delta_U
                 R_trial = compute_equilibrium_residual(
                     model, U_trial, F_ext, load_factor=lam,
-                    constrained_dofs=constrained_dofs, prescribed_vals=prescribed_vals
+                    constrained_dofs=constrained_dofs, prescribed_vals=prescribed_vals,
+                    dof_mgr=dof_mgr
                 )
                 trial_norm = float(np.linalg.norm(R_trial))
 
@@ -235,16 +244,19 @@ def solve_nonlinear_jfnk(
             )
 
     elapsed = time.perf_counter() - start_time
+    # Expand active displacement solution back to full nodal DOFs
+    U_full = dof_mgr.expand_displacements(U)
+    model.displacements = U_full
+
     if verbose:
         print("\n" + "=" * 65)
         print("  NON-LINEAR SOLVE CONVERGED SUCCESSFULLY")
         print(f"  Total solve time: {elapsed:.3f} s")
         print(f"  Total inner PCG iterations: {total_pcg_iters}")
-        print(f"  Max displacement: {float(np.max(np.abs(U))):.6e} m")
+        print(f"  Max displacement: {float(np.max(np.abs(U_full))):.6e} m")
         print("=" * 65)
 
-    # Store results in model
-    model.displacements = U
-    model.element_results = compute_element_stresses(model)
+    if model.mesh_elements is not None and len(model.mesh_elements) > 0:
+        model.element_results = compute_element_stresses(model)
 
-    return U
+    return U_full

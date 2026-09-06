@@ -17,12 +17,14 @@ from .boundary.conditions import (
     SupportDef, LoadDef, DOFConstraint, DOFType,
     create_fixed_support,
 )
+from .boundary.coupling import RigidCoupling
 from .mesh.beam_mesher import BeamMesher, MeshError
 from .solver.beam_solver import BeamSolver, SolverError
 from .solver.linear_static import solve_linear_static
 from .solver.nonlinear_solver import solve_nonlinear_jfnk, NonLinearConvergenceError
 from .solver.jfnk_operator import MatrixFreeJFNKOperator
 from .solver.amg_preconditioner import BlockBeamAMGPreconditioner
+from .solver.dof_manager import DOFManager
 from .results.post_processor import PostProcessor, PostProcessError
 from .results.result_data import StressPoint, ElementResult, ModelResults
 from .elements import (
@@ -45,9 +47,9 @@ __all__ = [
     "SectionDef", "create_hollow_tube", "create_solid_circle",
     "create_square_tube", "create_rectangular_tube", "create_i_beam",
     "create_rectangular_bar", "create_general_section",
-    # Boundary
+    # Boundary & Couplings
     "SupportDef", "LoadDef", "DOFConstraint", "DOFType",
-    "create_fixed_support",
+    "create_fixed_support", "RigidCoupling",
     # Mesh
     "BeamMesher", "MeshError",
     # Elements
@@ -57,6 +59,7 @@ __all__ = [
     "BeamSolver", "SolverError", "solve_linear_static",
     "solve_nonlinear_jfnk", "NonLinearConvergenceError",
     "MatrixFreeJFNKOperator", "BlockBeamAMGPreconditioner",
+    "DOFManager",
     # Results
     "PostProcessor", "PostProcessError",
     "StressPoint", "ElementResult", "ModelResults",
