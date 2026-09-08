@@ -1,4 +1,4 @@
-# WNFEA 72-Hour Unattended Autonomous Development Roadmap (10x SOTA Engine)
+﻿# WNFEA 72-Hour Unattended Autonomous Development Roadmap (10x SOTA Engine)
 
 This document is the persistent execution backlog for autonomous development of a state-of-the-art structural FEA engine targeting 10x market speedups.
 
@@ -8,6 +8,10 @@ This document is the persistent execution backlog for autonomous development of 
 3. **Atomic Commits**: One commit per completed task with structured conventional commit messages.
 4. **Failure Recovery**: Attempt up to 3 diagnostic fixes. If unresolved, rollback with `git checkout -- .`, record the blocker in `UNATTENDED_LOG.md`, and advance to the next independent task.
 5. **State Synchronization**: Update status to `[COMPLETED]` and log execution metrics in `UNATTENDED_LOG.md`.
+6. **Tool Stack Integration**:
+   - **CAD Kernel**: FreeCAD 1.1 (`C:\Program Files\FreeCAD 1.1\bin\freecadcmd.exe` and macros in `C:/Users/wsnun/AppData/Roaming/FreeCAD/v1-1/Macro`).
+   - **Mesher**: Gmsh 4.15.2 (Python API).
+   - **Post-Processing**: ParaView (VTU / PVSM).
 
 ---
 
@@ -17,7 +21,7 @@ This document is the persistent execution backlog for autonomous development of 
 - [x] **Task 1.1: Matrix-Free C3D10 Evaluation Engine**
   - **Objective**: Implement matrix-free operator `K @ u` in `wnfea/solver/matrix_free_c3d10.py` that computes element-level actions on-the-fly without assembling or storing global stiffness matrices.
   - **Acceptance Criteria**: Exact numerical parity with explicit CSR matrix (< 1e-12 relative error) while reducing memory consumption by >95%.
-  - **Verification**: `python run_all_tests.py`.
+  - **Verification**: `python run_all_tests.py`. (PASSED - commit `6e482be`)
 
 - [ ] **Task 1.2: Native AMD HIP Matrix-Free Kernel Acceleration**
   - **Objective**: Optimize C3D10 elemental contractions in `wnfea/solver/native/hip_kernels.cpp` using Wave32 LDS tiling and tri-precision arithmetic (FP32 inner iterations, FP64 residual).
@@ -44,20 +48,25 @@ This document is the persistent execution backlog for autonomous development of 
 
 ---
 
-### Phase 3: Fast Workflow Acceleration & Neural Warm-Start
-- [ ] **Task 3.1: Automatic Boundary Condition & Contact Detection**
-  - **Objective**: Implement `wnfea/boundary/auto_boundary_conditions.py` to analyze surface geometry and automatically classify bolt holes, base support planes, and gravitational body forces.
-  - **Acceptance Criteria**: Automatically tags 100% of standard cylindrical support features on STEP models without manual picking.
+### Phase 3: Core Tenet: Feature-Delta Re-meshing & Automated BCs
+- [ ] **Task 3.1: FreeCAD 1.1 B-Rep Cylindrical Face & Bolt Detection**
+  - **Objective**: Interface with FreeCAD 1.1 CAD kernel to extract cylindrical faces (`GeomAbs_Cylinder`), identify bolt hole standard diameters (M3–M16, 1/4"–1/2"), and generate automated pin/bolt constraints and bearing pressure distributions.
+  - **Acceptance Criteria**: Auto-identifies 100% of cylindrical holes on imported STEP CAD models without manual face picking.
   - **Verification**: `python run_all_tests.py`.
 
-- [ ] **Task 3.2: Non-Linear JFNK Neural Warm-Start Interface**
-  - **Objective**: Implement `wnfea/solver/neural_warm_start.py` allowing surrogate neural network predictions (NeMo / FNO / GNO) to initialize the displacement vector $u_0$.
-  - **Acceptance Criteria**: Solvers accept warm-start priors and verify residual norm reduction, falling back to cold start if prior is degraded.
+- [ ] **Task 3.2: Applied Acceleration Fields & Concentrated Point Loads**
+  - **Objective**: Implement uniform/angular acceleration body forces ($f_e = \rho \int N^T \vec{a} d\Omega$) and concentrated point load distribution in `wnfea/boundary/body_loads.py`.
+  - **Acceptance Criteria**: Acceleration load vector matches analytical $F = m \cdot a$ to machine precision across full 3D solid meshes.
   - **Verification**: `python run_all_tests.py`.
 
-- [ ] **Task 3.3: Localized Feature-Delta Remeshing**
-  - **Objective**: Implement spatial bounding-box delta remeshing so minor CAD changes only re-mesh modified topological regions rather than the entire structure.
-  - **Acceptance Criteria**: Remeshing a modified feature takes <10% of full-model meshing time.
+- [ ] **Task 3.3: Core Tenet: Localized Feature-Delta Re-meshing Engine**
+  - **Objective**: Implement bounding-box spatial void carving and localized Gmsh re-meshing when a FreeCAD CAD feature (fillet, hole, pocket) is modified. Stitch new local elements into the existing global matrix-free model without re-meshing unaffected geometry.
+  - **Acceptance Criteria**: Re-meshing a modified CAD feature completes in <1 second (vs minutes for global remesh) while preserving global solution warm-start.
+  - **Verification**: `python run_all_tests.py`.
+
+- [ ] **Task 3.4: Non-Linear JFNK Neural Warm-Start Interface**
+  - **Objective**: Implement `wnfea/solver/neural_warm_start.py` allowing surrogate neural network predictions (NeMo / FNO / GNO) to initialize displacement vectors for non-linear load steps.
+  - **Acceptance Criteria**: Reduces Newton-Raphson iterations on non-linear problems from ~20 to 1–2 iterations.
   - **Verification**: `python run_all_tests.py`.
 
 ---
