@@ -26,6 +26,7 @@ from typing import Optional, Callable
 
 from ..model import FEAModel
 from ..boundary.conditions import DOFType
+from ..boundary.body_loads import AccelerationField, SpatialPointLoad
 from .dof_manager import DOFManager
 from .matrix_free_c3d10 import MatrixFreeC3D10Operator
 from .assembler import build_element_stiffness_3d_beam, build_transformation_matrix
@@ -229,10 +230,17 @@ class HeterogeneousOperator(LinearOperator):
 
         return v_active.astype(self.dtype)
 
-    def assemble_rhs(self) -> np.ndarray:
-        """Assemble the active RHS force vector F from applied nodal loads."""
+    def assemble_rhs(
+        self,
+        acceleration: Optional[Union[AccelerationField, tuple[float, float, float]]] = None,
+    ) -> np.ndarray:
+        """
+        Assemble the active RHS force vector F from applied nodal loads,
+        acceleration fields (gravity/inertia), and spatial point loads.
+        """
         F_full = np.zeros((self.n_nodes, 6), dtype=np.float64)
 
+        # 1. Concentrated nodal loads
         for load in self.model.loads:
             if load.is_geometry_node:
                 mesh_node_id = self.model.geometry_to_mesh_node_map.get(load.node_id)
@@ -247,6 +255,36 @@ class HeterogeneousOperator(LinearOperator):
             fv = load.force_vector
             for i in range(6):
                 F_full[mesh_node_id, i] += fv[i]
+
+        # 2. Spatial point loads
+        if hasattr(self.model, "spatial_point_loads") and self.model.spatial_point_loads:
+            for sp_load in self.model.spatial_point_loads:
+                dist_loads = sp_load.distribute_to_mesh(self.model.mesh_nodes)
+                for dl in dist_loads:
+                    nid = dl.node_id
+                    if nid < self.n_nodes:
+                        fv = dl.force_vector
+                        for i in range(6):
+                            F_full[nid, i] += fv[i]
+
+        # 3. Applied acceleration field (gravity / inertia)
+        target_acc: Optional[AccelerationField] = None
+        if acceleration is not None:
+            if isinstance(acceleration, (list, tuple, np.ndarray)):
+                target_acc = AccelerationField(ax=float(acceleration[0]), ay=float(acceleration[1]), az=float(acceleration[2]))
+            else:
+                target_acc = acceleration
+        elif hasattr(self.model, "applied_accelerations") and self.model.applied_accelerations:
+            for acc_f in self.model.applied_accelerations:
+                F_body, _ = acc_f.apply_to_model(self.model)
+                F_full += F_body
+        elif getattr(self.model, "acceleration", None) is not None:
+            acc = self.model.acceleration
+            target_acc = AccelerationField(ax=float(acc[0]), ay=float(acc[1]), az=float(acc[2]))
+
+        if target_acc is not None:
+            F_body, _ = target_acc.apply_to_model(self.model)
+            F_full += F_body
 
         F_active = self.dof_mgr.condense_forces(F_full.ravel())
         if self.apply_bcs and len(self.fixed_dofs) > 0:
@@ -364,3 +402,8 @@ def solve_heterogeneous(
     op = HeterogeneousOperator(model, apply_bcs=True, device=device, precision=precision)
     u_full, info = op.solve_pcg(tol=tol, maxiter=maxiter)
     return u_full
+
+
+# Alias for backward compatibility
+HeterogeneousAssembler = HeterogeneousOperator
+

@@ -23,6 +23,7 @@ TEST_SUITES = [
     ("Two-Level Geometric p-Multigrid Preconditioner", [sys.executable, os.path.join("tests", "test_pmultigrid.py")]),
     ("Heterogeneous Subsystem Assembly and PCG Solver", [sys.executable, os.path.join("tests", "test_heterogeneous.py")]),
     ("FreeCAD 1.1 B-Rep Feature & Bolt Recognition", [sys.executable, os.path.join("tests", "test_freecad_brep.py")]),
+    ("Applied Acceleration Fields & Spatial Point Loads", [sys.executable, os.path.join("tests", "test_body_loads.py")]),
 ]
 
 

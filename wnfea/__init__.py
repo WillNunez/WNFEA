@@ -18,6 +18,7 @@ from .boundary.conditions import (
     create_fixed_support,
 )
 from .boundary.coupling import RigidCoupling
+from .boundary.body_loads import AccelerationField, SpatialPointLoad
 from .mesh.beam_mesher import BeamMesher, MeshError
 from .solver.beam_solver import BeamSolver, SolverError
 from .solver.linear_static import solve_linear_static
@@ -52,6 +53,7 @@ __all__ = [
     # Boundary & Couplings
     "SupportDef", "LoadDef", "DOFConstraint", "DOFType",
     "create_fixed_support", "RigidCoupling",
+    "AccelerationField", "SpatialPointLoad",
     # Mesh
     "BeamMesher", "MeshError",
     # Elements
