@@ -1,105 +1,79 @@
-﻿# WNFEA 72-Hour Unattended Autonomous Development Roadmap
+﻿# WNFEA 72-Hour Unattended Autonomous Development Roadmap (10x SOTA Engine)
 
-This document serves as the persistent state machine and execution backlog for autonomous development on WNFEA.
+This document is the persistent execution backlog for autonomous development of a state-of-the-art structural FEA engine targeting 10x market speedups.
 
-## Autonomous Agent Execution Rules
-1. **Never commit without 100% test pass**: Run `python run_all_tests.py` before every commit.
-2. **Dedicated branch**: Work strictly on `feat/unattended-72h-sprint`.
-3. **Atomic commits**: One commit per completed task with a descriptive conventional commit message.
-4. **Failure recovery**: If tests fail after a task implementation, attempt up to 3 diagnostic fixes. If still failing, revert with `git checkout -- .`, mark the task `[BLOCKED]` in this roadmap, record the issue in `UNATTENDED_LOG.md`, and proceed to the next independent task.
-5. **State logging**: After completing any task, update the status here to `[COMPLETED]` and append a detailed entry into `UNATTENDED_LOG.md`.
+## Autonomous Agent Operational Guardrails
+1. **Zero-Regression Gate**: Execute `python run_all_tests.py` before every commit. Must achieve 100% pass rate.
+2. **Dedicated Sprint Branch**: Work strictly on `feat/unattended-72h-sprint`.
+3. **Atomic Commits**: One commit per completed task with structured conventional commit messages.
+4. **Failure Recovery**: Attempt up to 3 diagnostic fixes. If unresolved, rollback with `git checkout -- .`, record the blocker in `UNATTENDED_LOG.md`, and advance to the next independent task.
+5. **State Synchronization**: Update status to `[COMPLETED]` and log execution metrics in `UNATTENDED_LOG.md`.
 
 ---
 
 ## Task Backlog
 
-### Phase 1: BSR 6x6 & AMG Preconditioning Integration
-- [ ] **Task 1.1: Integrate RCM Bandwidth Reduction into Assembler Pipeline**
-  - **Objective**: Connect `wnfea/mesh/rcm.py` into `wnfea/solver/assembler.py` and `wnfea/model.py` so models can optionally enable RCM reordering before matrix assembly.
-  - **Target Files**: `wnfea/solver/assembler.py`, `wnfea/model.py`
-  - **Acceptance Criteria**: `FEAModel(enable_rcm=True)` reduces matrix profile bandwidth while preserving exact solution displacements after inverse permutation.
-  - **Verification**: `python -m unittest tests/test_bsr_rcm.py` and `python run_all_tests.py`.
-
-- [ ] **Task 1.2: BSR 6x6 Block-Diagonal Jacobi & Chebyshev Preconditioner**
-  - **Objective**: Implement block-diagonal inverted 6x6 Jacobi preconditioner kernel in `wnfea/solver/bsr_matrix.py` and `wnfea/solver/fast_kernels.py`.
-  - **Target Files**: `wnfea/solver/bsr_matrix.py`, `wnfea/solver/fast_kernels.py`
-  - **Acceptance Criteria**: Preconditioned SpMV / PCG with BSR 6x6 converges in significantly fewer iterations than standard diagonal scaling on structural frame systems.
+### Phase 1: Matrix-Free C3D10 Operator & VRAM Minimization (Target: 2M DOFs in <300MB VRAM)
+- [ ] **Task 1.1: Matrix-Free C3D10 Evaluation Engine**
+  - **Objective**: Implement matrix-free operator `K @ u` in `wnfea/solver/matrix_free_c3d10.py` that computes element-level actions on-the-fly without assembling or storing global stiffness matrices.
+  - **Acceptance Criteria**: Exact numerical parity with explicit CSR matrix (< 1e-12 relative error) while reducing memory consumption by >95%.
   - **Verification**: `python run_all_tests.py`.
 
-- [ ] **Task 1.3: Automated Regression Suite for Integrated RCM Assembly**
-  - **Objective**: Add dedicated test suite verifying end-to-end model assembly and solve with and without RCM.
-  - **Target Files**: `tests/test_rcm_integration.py`, `run_all_tests.py`
-  - **Acceptance Criteria**: All degrees of freedom match within 1e-12 between standard ordering and RCM ordering.
-  - **Verification**: `python tests/test_rcm_integration.py` and `python run_all_tests.py`.
-
----
-
-### Phase 2: Solid Mechanics & Gmsh C3D10 Pipeline Integration
-- [ ] **Task 2.1: Gmsh 2nd-Order C3D10 Mesh Generation Integration**
-  - **Objective**: Enhance `wnfea/mesh/gmsh_mesher.py` to support tetrahedral 2nd-order C3D10 element generation from CAD STEP files.
-  - **Target Files**: `wnfea/mesh/gmsh_mesher.py`, `wnfea/mesh/__init__.py`
-  - **Acceptance Criteria**: Gmsh generates 10-node tetrahedra when requested with mid-side nodes placed on curved geometric boundaries.
+- [ ] **Task 1.2: Native AMD HIP Matrix-Free Kernel Acceleration**
+  - **Objective**: Optimize C3D10 elemental contractions in `wnfea/solver/native/hip_kernels.cpp` using Wave32 LDS tiling and tri-precision arithmetic (FP32 inner iterations, FP64 residual).
+  - **Acceptance Criteria**: Peak compute utilization exceeding 50% of RX 7800 XT theoretical TFLOPs.
   - **Verification**: `python run_all_tests.py`.
 
-- [ ] **Task 2.2: Solid Solver Routing in FEAModel**
-  - **Objective**: Update `wnfea/model.py` `solve()` method to automatically detect solid elements and route assembly and boundary condition imposition to `wnfea/solver/solid_solver.py`.
-  - **Target Files**: `wnfea/model.py`, `wnfea/solver/solid_solver.py`
-  - **Acceptance Criteria**: A model containing C3D10 solid elements can be solved via `model.solve()` with valid displacement field and Von Mises stress tensor.
-  - **Verification**: `python run_all_tests.py`.
-
-- [ ] **Task 2.3: End-to-End Solid Pipeline Regression Test**
-  - **Objective**: Create an automated test verifying CAD STEP import -> C3D10 meshing -> PCG solve -> Von Mises calculation.
-  - **Target Files**: `tests/test_solid_cad_pipeline.py`, `run_all_tests.py`
-  - **Acceptance Criteria**: Solution converges and matches analytical cantilever solid deflection within 5%.
-  - **Verification**: `python tests/test_solid_cad_pipeline.py` and `python run_all_tests.py`.
-
----
-
-### Phase 3: Hardware Monitor Telemetry & Desktop App Integration
-- [ ] **Task 3.1: Headless & Telemetry Unit Tests for Hardware Monitor**
-  - **Objective**: Create headless test suite for `gui_hardware_monitor.py` verifying metric polling, ROCm/GPU fallback, and bottleneck analysis without opening a blocking window.
-  - **Target Files**: `tests/test_hardware_monitor.py`, `gui_hardware_monitor.py`, `run_all_tests.py`
-  - **Acceptance Criteria**: Test polls CPU, RAM, GPU metrics and validates calculation logic without UI deadlocks.
-  - **Verification**: `python tests/test_hardware_monitor.py` and `python run_all_tests.py`.
-
-- [ ] **Task 3.2: Desktop App Hardware Monitor Action**
-  - **Objective**: Add a menu bar item / toolbar button in `desktop_app.py` to launch the hardware monitor as a standalone detached subprocess.
-  - **Target Files**: `desktop_app.py`
-  - **Acceptance Criteria**: Clicking "Hardware Monitor" spawns `gui_hardware_monitor.py` without blocking the main PySide6 UI thread.
-  - **Verification**: `python run_all_tests.py`.
-
-- [ ] **Task 3.3: Graceful Driver & Platform Fallbacks**
-  - **Objective**: Ensure all solver components and monitors degrade gracefully when AMD HIP/ROCm or PySide6 are unavailable.
-  - **Target Files**: `wnfea/solver/fast_kernels.py`, `wnfea/solver/amg_preconditioner.py`, `gui_hardware_monitor.py`
-  - **Acceptance Criteria**: Code operates in pure CPU mode without throwing unhandled exceptions when GPU libraries are absent.
+- [ ] **Task 1.3: p-Multigrid Preconditioning (Linear Tet Coarse Grid for Quadratic Tet)**
+  - **Objective**: Implement two-level geometric p-multigrid preconditioner where the coarse level is formed by vertex nodes (C3D4) and the fine level adds edge mid-nodes (C3D10).
+  - **Acceptance Criteria**: Reduces PCG iteration count from ~300 to <30 iterations on 2M DOF solid problems.
   - **Verification**: `python run_all_tests.py`.
 
 ---
 
-### Phase 4: Non-Linear JFNK Solvers & Benchmarking
-- [ ] **Task 4.1: Non-Linear Large Deformation Formulations for 3D Solids**
-  - **Objective**: Extend matrix-free JFNK solver to handle geometric nonlinearity in 3D tetrahedral solid elements.
-  - **Target Files**: `wnfea/solver/nonlinear_jfnk.py`, `wnfea/elements/c3d10.py`
-  - **Acceptance Criteria**: Large-deflection solid test converges across multiple load steps with quadratic asymptotic rate.
+### Phase 2: Heterogeneous CPU + GPU Pipelining & 2M DOF Benchmark
+- [ ] **Task 2.1: Heterogeneous Subsystem Assembly (99% Solids on GPU, 1% Beams on CPU)**
+  - **Objective**: Create `wnfea/solver/heterogeneous_assembler.py` to concurrently condense 6-DOF beam constraints and Dirichlet conditions on CPU multi-threading while GPU streams solid element evaluations.
+  - **Acceptance Criteria**: Seamless kinematic coupling between beam rot-DOFs and solid trans-DOFs with zero CPU-GPU transfer bottlenecks.
   - **Verification**: `python run_all_tests.py`.
 
-- [ ] **Task 4.2: Automated Scalability & Roofline Benchmark Suite**
-  - **Objective**: Create `wnfea/benchmark/benchmark_suite.py` that automatically records throughput (GFLOP/s, GB/s, solve time) across varying DOF scales (10k, 50k, 100k, 250k) and exports JSON/CSV metrics.
-  - **Target Files**: `wnfea/benchmark/benchmark_suite.py`
-  - **Acceptance Criteria**: Generates structured benchmark report in `results/benchmark_metrics.json` without failing when GPU is stressed.
+- [ ] **Task 2.2: 2M DOF Realistic Large Structural Benchmark**
+  - **Objective**: Build `scratch/benchmark_2m_dof.py` generating a complex 2,000,000 DOF solid-beam stiffened structure, profiling wallclock solve time, VRAM peak, and GFLOP/s.
+  - **Acceptance Criteria**: Solves 2M DOFs in under 15 seconds with peak VRAM < 2.0 GB.
+  - **Verification**: `python scratch/benchmark_2m_dof.py` and `python run_all_tests.py`.
+
+---
+
+### Phase 3: Fast Workflow Acceleration & Neural Warm-Start
+- [ ] **Task 3.1: Automatic Boundary Condition & Contact Detection**
+  - **Objective**: Implement `wnfea/boundary/auto_boundary_conditions.py` to analyze surface geometry and automatically classify bolt holes, base support planes, and gravitational body forces.
+  - **Acceptance Criteria**: Automatically tags 100% of standard cylindrical support features on STEP models without manual picking.
+  - **Verification**: `python run_all_tests.py`.
+
+- [ ] **Task 3.2: Non-Linear JFNK Neural Warm-Start Interface**
+  - **Objective**: Implement `wnfea/solver/neural_warm_start.py` allowing surrogate neural network predictions (NeMo / FNO / GNO) to initialize the displacement vector $u_0$.
+  - **Acceptance Criteria**: Solvers accept warm-start priors and verify residual norm reduction, falling back to cold start if prior is degraded.
+  - **Verification**: `python run_all_tests.py`.
+
+- [ ] **Task 3.3: Localized Feature-Delta Remeshing**
+  - **Objective**: Implement spatial bounding-box delta remeshing so minor CAD changes only re-mesh modified topological regions rather than the entire structure.
+  - **Acceptance Criteria**: Remeshing a modified feature takes <10% of full-model meshing time.
   - **Verification**: `python run_all_tests.py`.
 
 ---
 
-### Phase 5: CI/CD Automation & Documentation
-- [ ] **Task 5.1: GitHub Actions Automated CI Workflow**
-  - **Objective**: Create `.github/workflows/ci.yml` running `python run_all_tests.py` on all PRs and pushes.
-  - **Target Files**: `.github/workflows/ci.yml`
-  - **Acceptance Criteria**: GitHub Actions workflow file is syntactically valid and executes tests on Windows and Ubuntu runners.
-  - **Verification**: Validate syntax and verify with `python run_all_tests.py`.
+### Phase 4: Architectural Investigations & Generative Design (Documentation & Study)
+- [ ] **Task 4.1: Voxel / Octree AMR vs Conformal C3D10 Architectural Study**
+  - **Objective**: Author `docs/voxel_amr_architecture.md` evaluating Ansys Discovery-style cut-cell Cartesian AMR vs C3D10 conformal meshes for high-throughput GPU solves.
+  - **Acceptance Criteria**: Detailed mathematical formulation, roofline comparison, and implementation roadmap.
+  - **Verification**: File review & `python run_all_tests.py`.
 
-- [ ] **Task 5.2: Comprehensive Architecture & API Documentation**
-  - **Objective**: Update `README.md` with complete solver architecture overview, BSR 6x6 benchmarks, RCM ordering instructions, and telemetry monitoring guide.
-  - **Target Files**: `README.md`
-  - **Acceptance Criteria**: Complete, up-to-date documentation with clean GitHub-flavored markdown.
-  - **Verification**: Inspect markdown formatting and verify `python run_all_tests.py`.
+- [ ] **Task 4.2: In-the-Loop Topology Optimization Specification**
+  - **Objective**: Author `docs/generative_design_integration.md` defining integration of WNFEA's fast matrix-free solver into SIMP / Level-Set loops with GPU sensitivity filtering.
+  - **Acceptance Criteria**: Concrete API interfaces and gradient formulation.
+  - **Verification**: File review & `python run_all_tests.py`.
+
+- [ ] **Task 4.3: 3-Axis & 5-Axis CNC Machinability Intelligence Framework**
+  - **Objective**: Author `docs/machinability_study.md` defining parametric visibility cones, tool clearance constraints, and translation of density fields into parametric CAD B-rep surfaces (Fusion 360 style).
+  - **Acceptance Criteria**: Rigorous mathematical formulation of differentiable CNC accessibility penalties and parametric feature constraints.
+  - **Verification**: File review & `python run_all_tests.py`.
