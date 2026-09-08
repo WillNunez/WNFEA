@@ -25,6 +25,7 @@ TEST_SUITES = [
     ("FreeCAD 1.1 B-Rep Feature & Bolt Recognition", [sys.executable, os.path.join("tests", "test_freecad_brep.py")]),
     ("Applied Acceleration Fields & Spatial Point Loads", [sys.executable, os.path.join("tests", "test_body_loads.py")]),
     ("Spherical Sub-Modeling & Local Feature Re-Meshing", [sys.executable, os.path.join("tests", "test_submodeling.py")]),
+    ("Non-Linear JFNK Neural & Surrogate Warm-Start", [sys.executable, os.path.join("tests", "test_neural_warm_start.py")]),
 ]
 
 

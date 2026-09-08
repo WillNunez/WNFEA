@@ -136,6 +136,14 @@ class DOFManager:
         # Vectorized extraction of active independent DOFs
         return f_work[self.map_nodes, self.map_dofs]
 
+    def condense_displacements(self, u_full: np.ndarray) -> np.ndarray:
+        """
+        Extract active independent DOFs from a full displacement vector
+        of shape (n_nodes * 6,) or (n_nodes, 6).
+        """
+        u_work = np.asarray(u_full, dtype=np.float64).reshape((self.n_nodes, 6))
+        return u_work[self.map_nodes, self.map_dofs]
+
     def build_projection_matrix(self) -> np.ndarray:
         """
         Build the transformation matrix T_proj of shape (6*n_nodes, total_active_dofs)
