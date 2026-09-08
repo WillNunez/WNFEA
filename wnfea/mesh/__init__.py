@@ -9,6 +9,15 @@ from .rcm import (
     permute_solution_to_original,
 )
 
+from .submodeling import (
+    StressHotspot,
+    SphericalSubmodel,
+    detect_stress_hotspots,
+    compute_spherical_decay_radius,
+    extract_spherical_submodel,
+    solve_spherical_submodel,
+)
+
 __all__ = [
     "BeamMesher",
     "MeshError",
@@ -19,5 +28,11 @@ __all__ = [
     "compute_matrix_bandwidth",
     "apply_rcm_to_model",
     "permute_solution_to_original",
+    "StressHotspot",
+    "SphericalSubmodel",
+    "detect_stress_hotspots",
+    "compute_spherical_decay_radius",
+    "extract_spherical_submodel",
+    "solve_spherical_submodel",
 ]
 

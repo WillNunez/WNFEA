@@ -363,3 +363,18 @@ def compute_c3d10_stress_field(
     nodal_vm[mask] = nodal_vm_accum[mask] / nodal_vm_counts[mask]
 
     return cell_stresses, cell_vm, nodal_vm
+
+
+def solve_c3d10_linear_system(
+    model: FEAModel,
+    method: str = "auto",
+) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
+    """
+    End-to-end convenience solver for pure C3D10 solid models.
+    Assembles, solves for displacements, and computes element and nodal stresses.
+    """
+    K, F, _ = assemble_c3d10_sparse_3dof(model, apply_bcs=True)
+    u, stats = solve_c3d10_system(K, F, method=method)
+    cell_sig, cell_vm, nodal_vm = compute_c3d10_stress_field(model, u)
+    return u, cell_sig, cell_vm, nodal_vm
+
