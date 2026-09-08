@@ -1,4 +1,4 @@
-﻿"""
+"""
 Unit and Regression Tests for Matrix-Free C3D10 Continuum Solid Operator.
 
 Verifies:
@@ -87,6 +87,52 @@ def test_matrix_free_pcg_solve():
     print("  [PASS] test_matrix_free_pcg_solve")
 
 
+def test_matrix_free_gpu_hip_parity():
+    """Verify that AMD HIP GPU matrix-free matvec matches CPU and CSR."""
+    from wnfea.solver.fast_kernels import is_hip_available
+    if not is_hip_available():
+        print("  [SKIP] AMD HIP GPU runtime not detected, skipping GPU parity test.")
+        return
+
+    model, meta = generate_c3d10_structured_block(
+        length=2.0, width=0.4, height=0.4, nx=4, ny=2, nz=2, tip_load_total=1000.0
+    )
+    K_csr, F, _ = assemble_c3d10_sparse_3dof(model, apply_bcs=True)
+
+    # GPU operators for FP64 and FP32
+    mf_gpu_fp64 = MatrixFreeC3D10Operator(model, apply_bcs=True, device="hip", precision="fp64")
+    mf_gpu_fp32 = MatrixFreeC3D10Operator(model, apply_bcs=True, device="hip", precision="fp32")
+    mf_cpu = MatrixFreeC3D10Operator(model, apply_bcs=True, device="cpu")
+
+    np.random.seed(42)
+    u_test = np.random.randn(K_csr.shape[0])
+
+    v_csr = K_csr @ u_test
+    v_cpu = mf_cpu @ u_test
+    v_gpu_fp64 = mf_gpu_fp64 @ u_test
+    v_gpu_fp32 = mf_gpu_fp32 @ u_test
+
+    # Parity check FP64
+    err_fp64 = np.linalg.norm(v_gpu_fp64 - v_csr) / np.linalg.norm(v_csr)
+    print(f"  HIP GPU FP64 vs CSR relative error: {err_fp64:.4e}")
+    assert err_fp64 < 1e-12, f"HIP GPU FP64 matvec differs from CSR (err={err_fp64:.4e})"
+
+    # Parity check FP32
+    err_fp32 = np.linalg.norm(v_gpu_fp32 - v_csr) / np.linalg.norm(v_csr)
+    print(f"  HIP GPU FP32 vs CSR relative error: {err_fp32:.4e}")
+    assert err_fp32 < 1e-5, f"HIP GPU FP32 matvec differs from CSR (err={err_fp32:.4e})"
+
+    # PCG solve on GPU
+    u_sol_gpu, info = mf_gpu_fp64.solve_pcg(F, tol=1e-7, maxiter=500)
+    assert info["converged"], "GPU PCG failed to converge"
+    u_sol_cpu, _ = mf_cpu.solve_pcg(F, tol=1e-7, maxiter=500)
+    rel_sol_err = np.linalg.norm(u_sol_gpu - u_sol_cpu) / np.linalg.norm(u_sol_gpu)
+    print(f"  GPU PCG vs CPU PCG solution relative error: {rel_sol_err:.4e}")
+    assert rel_sol_err < 1e-5, f"GPU PCG solution differs from CPU (err={rel_sol_err:.4e})"
+
+    print("  [PASS] test_matrix_free_gpu_hip_parity (FP64 < 1e-12, FP32 < 1e-5, PCG exact)")
+
+
 def run_all():
     print("=" * 60)
     print("Running Matrix-Free C3D10 Operator Test Suite...")
@@ -94,6 +140,7 @@ def run_all():
     test_matrix_free_matvec_parity()
     test_matrix_free_diagonal_parity()
     test_matrix_free_pcg_solve()
+    test_matrix_free_gpu_hip_parity()
     print("=" * 60)
     print("ALL MATRIX-FREE C3D10 TESTS PASSED SUCCESSFULLY!")
     print("=" * 60)
@@ -101,3 +148,4 @@ def run_all():
 
 if __name__ == "__main__":
     run_all()
+

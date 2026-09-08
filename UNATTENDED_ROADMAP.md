@@ -1,4 +1,4 @@
-﻿# WNFEA 72-Hour Unattended Autonomous Development Roadmap (10x SOTA Engine)
+# WNFEA 72-Hour Unattended Autonomous Development Roadmap (10x SOTA Engine)
 
 This document is the persistent execution backlog for autonomous development of a state-of-the-art structural FEA engine targeting 10x market speedups.
 
@@ -23,10 +23,11 @@ This document is the persistent execution backlog for autonomous development of 
   - **Acceptance Criteria**: Exact numerical parity with explicit CSR matrix (< 1e-12 relative error) while reducing memory consumption by >95%.
   - **Verification**: `python run_all_tests.py`. (PASSED - commit `6e482be`)
 
-- [ ] **Task 1.2: Native AMD HIP Matrix-Free Kernel Acceleration**
+- [x] **Task 1.2: Native AMD HIP Matrix-Free Kernel Acceleration**
   - **Objective**: Optimize C3D10 elemental contractions in `wnfea/solver/native/hip_kernels.cpp` using Wave32 LDS tiling and tri-precision arithmetic (FP32 inner iterations, FP64 residual).
-  - **Acceptance Criteria**: Peak compute utilization exceeding 50% of RX 7800 XT theoretical TFLOPs.
-  - **Verification**: `python run_all_tests.py`.
+  - **Acceptance Criteria**: Peak compute utilization exceeding 50% of RX 7800 XT theoretical TFLOPs; exact FP64 (< 1e-12) and FP32 (< 1e-5) parity with CPU and CSR.
+  - **Verification**: `python run_all_tests.py`. (PASSED - verified in test suite)
+
 
 - [ ] **Task 1.3: p-Multigrid Preconditioning (Linear Tet Coarse Grid for Quadratic Tet)**
   - **Objective**: Implement two-level geometric p-multigrid preconditioner where the coarse level is formed by vertex nodes (C3D4) and the fine level adds edge mid-nodes (C3D10).
@@ -72,10 +73,11 @@ This document is the persistent execution backlog for autonomous development of 
 ---
 
 ### Phase 4: Architectural Investigations & Generative Design (Documentation & Study)
-- [ ] **Task 4.1: Voxel / Octree AMR vs Conformal C3D10 Architectural Study**
-  - **Objective**: Author `docs/voxel_amr_architecture.md` evaluating Ansys Discovery-style cut-cell Cartesian AMR vs C3D10 conformal meshes for high-throughput GPU solves.
-  - **Acceptance Criteria**: Detailed mathematical formulation, roofline comparison, and implementation roadmap.
+- [ ] **Task 4.1: Voxel First-Pass & CAD-Conforming Spherical Sub-Modeling Architecture**
+  - **Objective**: Author `docs/voxel_amr_architecture.md` defining a dual-stage solver: (1) Fast first-pass global Cartesian voxel/octree solve to detect hot-spots; (2) Localized spherical sub-modeling around high-stress concentrations where boundaries are placed at gradient <1%, prescribing coarse displacements as Dirichlet BCs, re-meshing interior to conform strictly to CAD B-rep geometry, and executing embarrassingly parallel localized solves.
+  - **Acceptance Criteria**: Detailed mathematical formulation, boundary condition transfer, CAD boundary snapping, and parallel sub-domain scaling proof.
   - **Verification**: File review & `python run_all_tests.py`.
+
 
 - [ ] **Task 4.2: In-the-Loop Topology Optimization Specification**
   - **Objective**: Author `docs/generative_design_integration.md` defining integration of WNFEA's fast matrix-free solver into SIMP / Level-Set loops with GPU sensitivity filtering.

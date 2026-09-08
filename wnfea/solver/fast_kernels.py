@@ -216,6 +216,21 @@ def _get_hip_lib():
             ]
             lib.hip_spmv_bsr6x6_benchmark.restype = ctypes.c_int
 
+            # Matrix-Free C3D10 3-DOF GPU Kernels
+            lib.hip_c3d10_matrix_free_matvec_fp64.argtypes = [
+                ctypes.c_void_p, ctypes.c_void_p, ctypes.c_void_p,
+                ctypes.c_void_p, ctypes.c_void_p, ctypes.c_void_p,
+                ctypes.c_int, ctypes.c_int, ctypes.c_int
+            ]
+            lib.hip_c3d10_matrix_free_matvec_fp64.restype = ctypes.c_int
+
+            lib.hip_c3d10_matrix_free_matvec_fp32.argtypes = [
+                ctypes.c_void_p, ctypes.c_void_p, ctypes.c_void_p,
+                ctypes.c_void_p, ctypes.c_void_p, ctypes.c_void_p,
+                ctypes.c_int, ctypes.c_int, ctypes.c_int
+            ]
+            lib.hip_c3d10_matrix_free_matvec_fp32.restype = ctypes.c_int
+
             _HIP_LIB = lib
         except Exception:
             _HIP_LIB = None
@@ -238,6 +253,11 @@ def get_hip_device_summary() -> HipDeviceSummary | None:
         _HIP_DEVICE_SUMMARY = summary
         return summary
     return None
+
+
+def is_hip_available() -> bool:
+    """Returns True if AMD HIP GPU runtime and kernels are available."""
+    return get_hip_device_summary() is not None
 
 
 def get_optimal_launch_config(n_items: int, item_type: str = "beam") -> tuple[int, int]:
@@ -871,6 +891,90 @@ def hip_spmv_bsr6x6_benchmark(
         raise RuntimeError(f"hip_spmv_bsr6x6_benchmark failed with error code {err}")
 
     return float(out_time_ms.value), float(out_bw.value), float(out_gf.value)
+
+
+def hip_c3d10_matrix_free_matvec(
+    nodes: np.ndarray,
+    elements: np.ndarray,
+    props: np.ndarray,
+    u: np.ndarray,
+    fixed_dofs: np.ndarray | None = None,
+    precision: str = "fp64",
+) -> np.ndarray | None:
+    """
+    Execute Matrix-Free C3D10 3-DOF matrix-vector product v = K @ u directly on AMD GPU.
+    
+    Parameters
+    ----------
+    nodes : (n_nodes, 3) float64 array of nodal coordinates.
+    elements : (n_solids, 10) int32 array of C3D10 connectivity.
+    props : (n_solids, 2) float64 array of material properties [E, nu].
+    u : (n_nodes * 3,) input vector.
+    fixed_dofs : Optional 1D int32 array of fixed Dirichlet DOFs.
+    precision : "fp64" (double precision) or "fp32" (single precision).
+
+    Returns
+    -------
+    v : (n_nodes * 3,) output product vector, or None if HIP is unavailable.
+    """
+    hip_lib = _get_hip_lib()
+    if hip_lib is None:
+        return None
+
+    n_nodes = nodes.shape[0]
+    n_solids = elements.shape[0]
+    total_dofs = n_nodes * 3
+
+    if fixed_dofs is not None and len(fixed_dofs) > 0:
+        h_fixed = np.ascontiguousarray(fixed_dofs, dtype=np.int32)
+        n_fixed = len(h_fixed)
+        p_fixed = h_fixed.ctypes.data
+    else:
+        p_fixed = None
+        n_fixed = 0
+
+    if precision == "fp32":
+        h_nodes = np.ascontiguousarray(nodes, dtype=np.float32)
+        h_elems = np.ascontiguousarray(elements, dtype=np.int32)
+        h_props = np.ascontiguousarray(props, dtype=np.float32)
+        h_u = np.ascontiguousarray(u, dtype=np.float32)
+        h_v = np.zeros(total_dofs, dtype=np.float32)
+
+        err = hip_lib.hip_c3d10_matrix_free_matvec_fp32(
+            h_nodes.ctypes.data,
+            h_elems.ctypes.data,
+            h_props.ctypes.data,
+            h_u.ctypes.data,
+            h_v.ctypes.data,
+            p_fixed,
+            ctypes.c_int(n_fixed),
+            ctypes.c_int(n_nodes),
+            ctypes.c_int(n_solids),
+        )
+        if err != 0:
+            return None
+        return h_v.astype(u.dtype)
+    else:
+        h_nodes = np.ascontiguousarray(nodes, dtype=np.float64)
+        h_elems = np.ascontiguousarray(elements, dtype=np.int32)
+        h_props = np.ascontiguousarray(props, dtype=np.float64)
+        h_u = np.ascontiguousarray(u, dtype=np.float64)
+        h_v = np.zeros(total_dofs, dtype=np.float64)
+
+        err = hip_lib.hip_c3d10_matrix_free_matvec_fp64(
+            h_nodes.ctypes.data,
+            h_elems.ctypes.data,
+            h_props.ctypes.data,
+            h_u.ctypes.data,
+            h_v.ctypes.data,
+            p_fixed,
+            ctypes.c_int(n_fixed),
+            ctypes.c_int(n_nodes),
+            ctypes.c_int(n_solids),
+        )
+        if err != 0:
+            return None
+        return h_v
 
 
 

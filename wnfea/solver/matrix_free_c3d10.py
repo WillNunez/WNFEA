@@ -1,4 +1,4 @@
-﻿"""
+"""
 Matrix-Free C3D10 Continuum Solid Operator & Solver for WNFEA.
 
 Eliminates the global stiffness matrix assembly bottleneck:
@@ -36,7 +36,9 @@ class MatrixFreeC3D10Operator(LinearOperator):
         model: FEAModel,
         apply_bcs: bool = True,
         precompute_Ke: bool = True,
-        dtype: np.dtype = np.float64,
+        device: str = "auto",
+        dtype: Optional[np.dtype] = None,
+        precision: str = "fp64",
     ):
         """
         Initialize the matrix-free operator from an FEAModel.
@@ -47,14 +49,26 @@ class MatrixFreeC3D10Operator(LinearOperator):
         apply_bcs : If True, enforces Dirichlet BCs (fixed DOFs have identity action).
         precompute_Ke : If True, pre-evaluates 30x30 Ke tensors into contiguous RAM for
                         maximum SpMV speed. If False, evaluates on-the-fly for minimal RAM.
-        dtype : Data type for operations (default: float64).
+        device : "auto", "hip", or "cpu".
+        dtype : Data type for operations (default: float64, or inferred from precision).
+        precision : "fp64" or "fp32".
         """
+        if dtype is None:
+            dtype = np.float32 if precision.lower() == "fp32" else np.float64
+        self.precision = precision.lower()
+
         self.model = model
         self.n_nodes = len(model.mesh_nodes)
         self.n_elements = len(model.solid_elements)
         self.n_dofs = self.n_nodes * 3
         self.apply_bcs = apply_bcs
         self.precompute_Ke = precompute_Ke
+        self.device = device
+
+        # Contiguous buffers for GPU kernel dispatch
+        self.nodes_c = np.ascontiguousarray(model.mesh_nodes, dtype=np.float64)
+        self.elements_c = np.ascontiguousarray(model.solid_elements, dtype=np.int32)
+        self.props_c = np.zeros((self.n_elements, 2), dtype=np.float64)
 
         # Construct global elemental DOF index map of shape (n_elements, 30)
         self.elem_dofs = np.empty((self.n_elements, 30), dtype=np.int32)
@@ -81,19 +95,24 @@ class MatrixFreeC3D10Operator(LinearOperator):
         default_mat = next(iter(model.materials.values())) if model.materials else None
         self.E_default = default_mat.youngs_modulus if default_mat else 2.1e11
         self.nu_default = default_mat.poissons_ratio if default_mat else 0.3
+        self.props_c[:, 0] = self.E_default
+        self.props_c[:, 1] = self.nu_default
+
+        if hasattr(model, "solid_materials") and model.materials:
+            for e_idx in range(self.n_elements):
+                mat_name = model.solid_materials.get(e_idx)
+                if mat_name and mat_name in model.materials:
+                    m = model.materials[mat_name]
+                    self.props_c[e_idx, 0] = m.youngs_modulus
+                    self.props_c[e_idx, 1] = m.poissons_ratio
 
         if self.precompute_Ke:
-            # Shape (n_elements, 30, 30) contiguous in memory
             self.Ke_batch = np.empty((self.n_elements, 30, 30), dtype=dtype)
             for e_idx, node_indices in enumerate(model.solid_elements):
                 coords = model.mesh_nodes[node_indices]
-                mat_name = model.solid_materials.get(e_idx) if hasattr(model, "solid_materials") else None
-                if mat_name and mat_name in model.materials:
-                    m = model.materials[mat_name]
-                    E, nu = m.youngs_modulus, m.poissons_ratio
-                else:
-                    E, nu = self.E_default, self.nu_default
-                self.Ke_batch[e_idx] = element_stiffness_c3d10(coords, E, nu).astype(dtype)
+                E_val = self.props_c[e_idx, 0]
+                nu_val = self.props_c[e_idx, 1]
+                self.Ke_batch[e_idx] = element_stiffness_c3d10(coords, E_val, nu_val).astype(dtype)
         else:
             self.Ke_batch = None
 
@@ -105,7 +124,7 @@ class MatrixFreeC3D10Operator(LinearOperator):
         else:
             for e_idx, node_indices in enumerate(model.solid_elements):
                 coords = model.mesh_nodes[node_indices]
-                Ke = element_stiffness_c3d10(coords, self.E_default, self.nu_default)
+                Ke = element_stiffness_c3d10(coords, self.props_c[e_idx, 0], self.props_c[e_idx, 1])
                 np.add.at(self.diag_K, self.elem_dofs[e_idx], np.diag(Ke))
 
         if self.apply_bcs and len(self.fixed_dofs) > 0:
@@ -118,12 +137,28 @@ class MatrixFreeC3D10Operator(LinearOperator):
     def _matvec(self, u: np.ndarray) -> np.ndarray:
         """
         Evaluate v = K @ u via gather -> elemental product -> scatter-add.
-        Preserves symmetry by zeroing fixed input columns and applying identity to fixed rows.
+        Dispatches to native AMD HIP GPU kernel when available.
         """
         u_arr = np.asarray(u, dtype=self.dtype)
+
+        # GPU acceleration path (AMD Radeon HIP Wave32)
+        if self.device in ("hip", "auto"):
+            from .fast_kernels import hip_c3d10_matrix_free_matvec
+            prec = "fp32" if self.dtype == np.float32 else "fp64"
+            v_gpu = hip_c3d10_matrix_free_matvec(
+                self.nodes_c,
+                self.elements_c,
+                self.props_c,
+                u_arr,
+                fixed_dofs=self.fixed_dofs if self.apply_bcs else None,
+                precision=prec,
+            )
+            if v_gpu is not None:
+                return v_gpu.astype(self.dtype)
+
+        # CPU Fallback Path
         v = np.zeros(self.n_dofs, dtype=self.dtype)
 
-        # For symmetric Dirichlet BCs, zero fixed columns in element contraction
         if self.apply_bcs and len(self.fixed_dofs) > 0:
             u_eval = np.copy(u_arr)
             u_eval[self.fixed_dofs] = 0.0
@@ -131,21 +166,16 @@ class MatrixFreeC3D10Operator(LinearOperator):
             u_eval = u_arr
 
         if self.precompute_Ke:
-            # 1. Gather elemental displacements: shape (n_elements, 30)
             u_e = u_eval[self.elem_dofs]
-            # 2. Batched matrix-vector multiplication
             f_e = np.matmul(self.Ke_batch, u_e[:, :, np.newaxis]).squeeze(-1)
-            # 3. Scatter-add to global force vector
             np.add.at(v, self.flat_elem_dofs, f_e.ravel())
         else:
-            # On-the-fly evaluation using element_internal_forces_c3d10
             for e_idx, node_indices in enumerate(self.model.solid_elements):
                 coords = self.model.mesh_nodes[node_indices]
                 u_elem = u_eval[self.elem_dofs[e_idx]]
-                f_elem = element_internal_forces_c3d10(coords, u_elem, self.E_default, self.nu_default)
+                f_elem = element_internal_forces_c3d10(coords, u_elem, self.props_c[e_idx, 0], self.props_c[e_idx, 1])
                 np.add.at(v, self.elem_dofs[e_idx], f_elem)
 
-        # 4. Identity row enforcement for fixed Dirichlet DOFs: (K u)_j = 1 * u_j
         if self.apply_bcs and len(self.fixed_dofs) > 0:
             v[self.fixed_dofs] = u_arr[self.fixed_dofs]
 

@@ -339,17 +339,21 @@ __global__ void c3d10_internal_forces_kernel(
             for (int i = 0; i < 10; ++i) {
                 double dN[3];
                 get_node_dN_dxi(i, xi, eta, zeta, dN);
-                J[0][0] += dN[0] * s_coords[t][i][0];
-                J[0][1] += dN[1] * s_coords[t][i][0];
-                J[0][2] += dN[2] * s_coords[t][i][0];
+                const auto xi_c = s_coords[t][i][0];
+                const auto yi_c = s_coords[t][i][1];
+                const auto zi_c = s_coords[t][i][2];
 
-                J[1][0] += dN[0] * s_coords[t][i][1];
-                J[1][1] += dN[1] * s_coords[t][i][1];
-                J[1][2] += dN[2] * s_coords[t][i][1];
+                J[0][0] += dN[0] * xi_c;
+                J[0][1] += dN[0] * yi_c;
+                J[0][2] += dN[0] * zi_c;
 
-                J[2][0] += dN[0] * s_coords[t][i][2];
-                J[2][1] += dN[1] * s_coords[t][i][2];
-                J[2][2] += dN[2] * s_coords[t][i][2];
+                J[1][0] += dN[1] * xi_c;
+                J[1][1] += dN[1] * yi_c;
+                J[1][2] += dN[1] * zi_c;
+
+                J[2][0] += dN[2] * xi_c;
+                J[2][1] += dN[2] * yi_c;
+                J[2][2] += dN[2] * zi_c;
             }
 
             // Invert 3x3 Jacobian
@@ -3159,6 +3163,494 @@ WNFEA_EXPORT int hip_spmv_bsr6x6_benchmark(
     hipFree(d_b_values);
     hipFree(d_x);
     hipFree(d_y);
+
+    return 0;
+}
+
+
+// ============================================================================
+// Matrix-Free C3D10 Continuum Solid 3-DOF Operator (Wave32 AMD RDNA 3 Tuning)
+// Evaluates v = K @ u on-the-fly without global matrix assembly
+// Supports pure 3-DOF per node, tri-precision (FP32/FP64) and symmetric Dirichlet BCs
+// ============================================================================
+
+__constant__ float C_GAUSS_XI_F32[4]   = { 0.1381966011250105f, 0.5854101966249685f, 0.1381966011250105f, 0.1381966011250105f };
+__constant__ float C_GAUSS_ETA_F32[4]  = { 0.1381966011250105f, 0.1381966011250105f, 0.5854101966249685f, 0.1381966011250105f };
+__constant__ float C_GAUSS_ZETA_F32[4] = { 0.1381966011250105f, 0.1381966011250105f, 0.1381966011250105f, 0.5854101966249685f };
+static const float C_WEIGHT_F32 = 1.0f / 24.0f;
+
+__device__ inline void get_node_dN_dxi_fp32(int node_idx, float xi, float eta, float zeta, float dN[3]) {
+    const float L1 = 1.0f - xi - eta - zeta;
+    const float L2 = xi;
+    const float L3 = eta;
+    const float L4 = zeta;
+
+    float dL1 = 0.0f, dL2 = 0.0f, dL3 = 0.0f, dL4 = 0.0f;
+    switch (node_idx) {
+        case 0: dL1 = 4.0f * L1 - 1.0f; break;
+        case 1: dL2 = 4.0f * L2 - 1.0f; break;
+        case 2: dL3 = 4.0f * L3 - 1.0f; break;
+        case 3: dL4 = 4.0f * L4 - 1.0f; break;
+        case 4: dL1 = 4.0f * L2; dL2 = 4.0f * L1; break;
+        case 5: dL2 = 4.0f * L3; dL3 = 4.0f * L2; break;
+        case 6: dL1 = 4.0f * L3; dL3 = 4.0f * L1; break;
+        case 7: dL1 = 4.0f * L4; dL4 = 4.0f * L1; break;
+        case 8: dL2 = 4.0f * L4; dL4 = 4.0f * L2; break;
+        case 9: dL3 = 4.0f * L4; dL4 = 4.0f * L3; break;
+    }
+    dN[0] = dL2 - dL1;
+    dN[1] = dL3 - dL1;
+    dN[2] = dL4 - dL1;
+}
+
+__launch_bounds__(32, 2)
+__global__ void c3d10_matrix_free_3dof_fp64_kernel(
+    const double*  __restrict__ nodes,          // [n_nodes * 3]
+    const int*     __restrict__ solid_elements, // [n_solids * 10]
+    const double*  __restrict__ props,          // [n_solids * 2] (E, nu)
+    const double*  __restrict__ u,              // [n_nodes * 3]
+    double*        __restrict__ v,              // [n_nodes * 3]
+    const uint8_t* __restrict__ is_fixed_mask,  // [n_nodes * 3]
+    int n_solids
+) {
+    __shared__ double s_coords[32][10][3];
+    __shared__ double s_u[32][10][3];
+    __shared__ double s_f[32][10][3];
+
+    int tid = blockIdx.x * blockDim.x + threadIdx.x;
+    int stride = blockDim.x * gridDim.x;
+    int t = threadIdx.x;
+
+    for (int e = tid; e < n_solids; e += stride) {
+        const int* elem_nodes = &solid_elements[e * 10];
+        const double E_mod = props[e * 2 + 0];
+        const double nu    = props[e * 2 + 1];
+
+        const double factor = E_mod / ((1.0 + nu) * (1.0 - 2.0 * nu));
+        const double c11 = factor * (1.0 - nu);
+        const double c12 = factor * nu;
+        const double c44 = factor * 0.5 * (1.0 - 2.0 * nu);
+
+        #pragma unroll
+        for (int i = 0; i < 10; ++i) {
+            const int nid = elem_nodes[i];
+            s_coords[t][i][0] = nodes[nid * 3 + 0];
+            s_coords[t][i][1] = nodes[nid * 3 + 1];
+            s_coords[t][i][2] = nodes[nid * 3 + 2];
+
+            if (is_fixed_mask) {
+                s_u[t][i][0] = is_fixed_mask[nid * 3 + 0] ? 0.0 : u[nid * 3 + 0];
+                s_u[t][i][1] = is_fixed_mask[nid * 3 + 1] ? 0.0 : u[nid * 3 + 1];
+                s_u[t][i][2] = is_fixed_mask[nid * 3 + 2] ? 0.0 : u[nid * 3 + 2];
+            } else {
+                s_u[t][i][0] = u[nid * 3 + 0];
+                s_u[t][i][1] = u[nid * 3 + 1];
+                s_u[t][i][2] = u[nid * 3 + 2];
+            }
+
+            s_f[t][i][0] = 0.0;
+            s_f[t][i][1] = 0.0;
+            s_f[t][i][2] = 0.0;
+        }
+
+        #pragma nounroll
+        for (int g = 0; g < 4; ++g) {
+            const double xi   = C_GAUSS_XI[g];
+            const double eta  = C_GAUSS_ETA[g];
+            const double zeta = C_GAUSS_ZETA[g];
+
+            double J[3][3] = { {0.0} };
+            for (int i = 0; i < 10; ++i) {
+                double dN[3];
+                get_node_dN_dxi(i, xi, eta, zeta, dN);
+                const auto xi_c = s_coords[t][i][0];
+                const auto yi_c = s_coords[t][i][1];
+                const auto zi_c = s_coords[t][i][2];
+
+                J[0][0] += dN[0] * xi_c;
+                J[0][1] += dN[0] * yi_c;
+                J[0][2] += dN[0] * zi_c;
+
+                J[1][0] += dN[1] * xi_c;
+                J[1][1] += dN[1] * yi_c;
+                J[1][2] += dN[1] * zi_c;
+
+                J[2][0] += dN[2] * xi_c;
+                J[2][1] += dN[2] * yi_c;
+                J[2][2] += dN[2] * zi_c;
+            }
+
+            const double c00 = J[1][1] * J[2][2] - J[1][2] * J[2][1];
+            const double c01 = J[1][2] * J[2][0] - J[1][0] * J[2][2];
+            const double c02 = J[1][0] * J[2][1] - J[1][1] * J[2][0];
+
+            const double detJ = J[0][0] * c00 + J[0][1] * c01 + J[0][2] * c02;
+            if (fabs(detJ) < 1e-15) continue;
+            const double inv_detJ = 1.0 / detJ;
+
+            const double invJ[3][3] = {
+                { c00 * inv_detJ, (J[0][2]*J[2][1] - J[0][1]*J[2][2]) * inv_detJ, (J[0][1]*J[1][2] - J[0][2]*J[1][1]) * inv_detJ },
+                { c01 * inv_detJ, (J[0][0]*J[2][2] - J[0][2]*J[2][0]) * inv_detJ, (J[0][2]*J[1][0] - J[0][0]*J[1][2]) * inv_detJ },
+                { c02 * inv_detJ, (J[0][1]*J[2][0] - J[0][0]*J[2][1]) * inv_detJ, (J[0][0]*J[1][1] - J[0][1]*J[1][0]) * inv_detJ }
+            };
+
+            double eps[6] = { 0.0 };
+            for (int i = 0; i < 10; ++i) {
+                double dN[3];
+                get_node_dN_dxi(i, xi, eta, zeta, dN);
+                const double dNx = invJ[0][0] * dN[0] + invJ[0][1] * dN[1] + invJ[0][2] * dN[2];
+                const double dNy = invJ[1][0] * dN[0] + invJ[1][1] * dN[1] + invJ[1][2] * dN[2];
+                const double dNz = invJ[2][0] * dN[0] + invJ[2][1] * dN[1] + invJ[2][2] * dN[2];
+
+                const double ux = s_u[t][i][0];
+                const double uy = s_u[t][i][1];
+                const double uz = s_u[t][i][2];
+
+                eps[0] += dNx * ux;
+                eps[1] += dNy * uy;
+                eps[2] += dNz * uz;
+                eps[3] += dNy * ux + dNx * uy;
+                eps[4] += dNz * uy + dNy * uz;
+                eps[5] += dNz * ux + dNx * uz;
+            }
+
+            const double sig[6] = {
+                c11 * eps[0] + c12 * eps[1] + c12 * eps[2],
+                c12 * eps[0] + c11 * eps[1] + c12 * eps[2],
+                c12 * eps[0] + c12 * eps[1] + c11 * eps[2],
+                c44 * eps[3],
+                c44 * eps[4],
+                c44 * eps[5]
+            };
+
+            const double w_detJ = C_WEIGHT * detJ;
+
+            for (int i = 0; i < 10; ++i) {
+                double dN[3];
+                get_node_dN_dxi(i, xi, eta, zeta, dN);
+                const double dNx = invJ[0][0] * dN[0] + invJ[0][1] * dN[1] + invJ[0][2] * dN[2];
+                const double dNy = invJ[1][0] * dN[0] + invJ[1][1] * dN[1] + invJ[1][2] * dN[2];
+                const double dNz = invJ[2][0] * dN[0] + invJ[2][1] * dN[1] + invJ[2][2] * dN[2];
+
+                s_f[t][i][0] += w_detJ * (dNx * sig[0] + dNy * sig[3] + dNz * sig[5]);
+                s_f[t][i][1] += w_detJ * (dNy * sig[1] + dNx * sig[3] + dNz * sig[4]);
+                s_f[t][i][2] += w_detJ * (dNz * sig[2] + dNy * sig[4] + dNx * sig[5]);
+            }
+        }
+
+        for (int i = 0; i < 10; ++i) {
+            const int nid = elem_nodes[i];
+            atomicAddDouble(&v[nid * 3 + 0], s_f[t][i][0]);
+            atomicAddDouble(&v[nid * 3 + 1], s_f[t][i][1]);
+            atomicAddDouble(&v[nid * 3 + 2], s_f[t][i][2]);
+        }
+    }
+}
+
+__launch_bounds__(32, 2)
+__global__ void c3d10_matrix_free_3dof_fp32_kernel(
+    const float*   __restrict__ nodes,          // [n_nodes * 3]
+    const int*     __restrict__ solid_elements, // [n_solids * 10]
+    const float*   __restrict__ props,          // [n_solids * 2] (E, nu)
+    const float*   __restrict__ u,              // [n_nodes * 3]
+    float*         __restrict__ v,              // [n_nodes * 3]
+    const uint8_t* __restrict__ is_fixed_mask,  // [n_nodes * 3]
+    int n_solids
+) {
+    __shared__ float s_coords[32][10][3];
+    __shared__ float s_u[32][10][3];
+    __shared__ float s_f[32][10][3];
+
+    int tid = blockIdx.x * blockDim.x + threadIdx.x;
+    int stride = blockDim.x * gridDim.x;
+    int t = threadIdx.x;
+
+    for (int e = tid; e < n_solids; e += stride) {
+        const int* elem_nodes = &solid_elements[e * 10];
+        const float E_mod = props[e * 2 + 0];
+        const float nu    = props[e * 2 + 1];
+
+        const float factor = E_mod / ((1.0f + nu) * (1.0f - 2.0f * nu));
+        const float c11 = factor * (1.0f - nu);
+        const float c12 = factor * nu;
+        const float c44 = factor * 0.5f * (1.0f - 2.0f * nu);
+
+        #pragma unroll
+        for (int i = 0; i < 10; ++i) {
+            const int nid = elem_nodes[i];
+            s_coords[t][i][0] = nodes[nid * 3 + 0];
+            s_coords[t][i][1] = nodes[nid * 3 + 1];
+            s_coords[t][i][2] = nodes[nid * 3 + 2];
+
+            if (is_fixed_mask) {
+                s_u[t][i][0] = is_fixed_mask[nid * 3 + 0] ? 0.0f : u[nid * 3 + 0];
+                s_u[t][i][1] = is_fixed_mask[nid * 3 + 1] ? 0.0f : u[nid * 3 + 1];
+                s_u[t][i][2] = is_fixed_mask[nid * 3 + 2] ? 0.0f : u[nid * 3 + 2];
+            } else {
+                s_u[t][i][0] = u[nid * 3 + 0];
+                s_u[t][i][1] = u[nid * 3 + 1];
+                s_u[t][i][2] = u[nid * 3 + 2];
+            }
+
+            s_f[t][i][0] = 0.0f;
+            s_f[t][i][1] = 0.0f;
+            s_f[t][i][2] = 0.0f;
+        }
+
+        #pragma nounroll
+        for (int g = 0; g < 4; ++g) {
+            const float xi   = C_GAUSS_XI_F32[g];
+            const float eta  = C_GAUSS_ETA_F32[g];
+            const float zeta = C_GAUSS_ZETA_F32[g];
+
+            float J[3][3] = { {0.0f} };
+            for (int i = 0; i < 10; ++i) {
+                float dN[3];
+                get_node_dN_dxi_fp32(i, xi, eta, zeta, dN);
+                const auto xi_c = s_coords[t][i][0];
+                const auto yi_c = s_coords[t][i][1];
+                const auto zi_c = s_coords[t][i][2];
+
+                J[0][0] += dN[0] * xi_c;
+                J[0][1] += dN[0] * yi_c;
+                J[0][2] += dN[0] * zi_c;
+
+                J[1][0] += dN[1] * xi_c;
+                J[1][1] += dN[1] * yi_c;
+                J[1][2] += dN[1] * zi_c;
+
+                J[2][0] += dN[2] * xi_c;
+                J[2][1] += dN[2] * yi_c;
+                J[2][2] += dN[2] * zi_c;
+            }
+
+            const float c00 = J[1][1] * J[2][2] - J[1][2] * J[2][1];
+            const float c01 = J[1][2] * J[2][0] - J[1][0] * J[2][2];
+            const float c02 = J[1][0] * J[2][1] - J[1][1] * J[2][0];
+
+            const float detJ = J[0][0] * c00 + J[0][1] * c01 + J[0][2] * c02;
+            if (fabsf(detJ) < 1e-15f) continue;
+            const float inv_detJ = 1.0f / detJ;
+
+            const float invJ[3][3] = {
+                { c00 * inv_detJ, (J[0][2]*J[2][1] - J[0][1]*J[2][2]) * inv_detJ, (J[0][1]*J[1][2] - J[0][2]*J[1][1]) * inv_detJ },
+                { c01 * inv_detJ, (J[0][0]*J[2][2] - J[0][2]*J[2][0]) * inv_detJ, (J[0][2]*J[1][0] - J[0][0]*J[1][2]) * inv_detJ },
+                { c02 * inv_detJ, (J[0][1]*J[2][0] - J[0][0]*J[2][1]) * inv_detJ, (J[0][0]*J[1][1] - J[0][1]*J[1][0]) * inv_detJ }
+            };
+
+            float eps[6] = { 0.0f };
+            for (int i = 0; i < 10; ++i) {
+                float dN[3];
+                get_node_dN_dxi_fp32(i, xi, eta, zeta, dN);
+                const float dNx = invJ[0][0] * dN[0] + invJ[0][1] * dN[1] + invJ[0][2] * dN[2];
+                const float dNy = invJ[1][0] * dN[0] + invJ[1][1] * dN[1] + invJ[1][2] * dN[2];
+                const float dNz = invJ[2][0] * dN[0] + invJ[2][1] * dN[1] + invJ[2][2] * dN[2];
+
+                const float ux = s_u[t][i][0];
+                const float uy = s_u[t][i][1];
+                const float uz = s_u[t][i][2];
+
+                eps[0] += dNx * ux;
+                eps[1] += dNy * uy;
+                eps[2] += dNz * uz;
+                eps[3] += dNy * ux + dNx * uy;
+                eps[4] += dNz * uy + dNy * uz;
+                eps[5] += dNz * ux + dNx * uz;
+            }
+
+            const float sig[6] = {
+                c11 * eps[0] + c12 * eps[1] + c12 * eps[2],
+                c12 * eps[0] + c11 * eps[1] + c12 * eps[2],
+                c12 * eps[0] + c12 * eps[1] + c11 * eps[2],
+                c44 * eps[3],
+                c44 * eps[4],
+                c44 * eps[5]
+            };
+
+            const float w_detJ = C_WEIGHT_F32 * detJ;
+
+            for (int i = 0; i < 10; ++i) {
+                float dN[3];
+                get_node_dN_dxi_fp32(i, xi, eta, zeta, dN);
+                const float dNx = invJ[0][0] * dN[0] + invJ[0][1] * dN[1] + invJ[0][2] * dN[2];
+                const float dNy = invJ[1][0] * dN[0] + invJ[1][1] * dN[1] + invJ[1][2] * dN[2];
+                const float dNz = invJ[2][0] * dN[0] + invJ[2][1] * dN[1] + invJ[2][2] * dN[2];
+
+                s_f[t][i][0] += w_detJ * (dNx * sig[0] + dNy * sig[3] + dNz * sig[5]);
+                s_f[t][i][1] += w_detJ * (dNy * sig[1] + dNx * sig[3] + dNz * sig[4]);
+                s_f[t][i][2] += w_detJ * (dNz * sig[2] + dNy * sig[4] + dNx * sig[5]);
+            }
+        }
+
+        for (int i = 0; i < 10; ++i) {
+            const int nid = elem_nodes[i];
+            atomicAddFloat(&v[nid * 3 + 0], s_f[t][i][0]);
+            atomicAddFloat(&v[nid * 3 + 1], s_f[t][i][1]);
+            atomicAddFloat(&v[nid * 3 + 2], s_f[t][i][2]);
+        }
+    }
+}
+
+__global__ void c3d10_enforce_fixed_bcs_fp64_kernel(
+    const double* __restrict__ u,
+    double*       __restrict__ v,
+    const int*    __restrict__ fixed_dofs,
+    int n_fixed_dofs
+) {
+    int tid = blockIdx.x * blockDim.x + threadIdx.x;
+    if (tid < n_fixed_dofs) {
+        int dof = fixed_dofs[tid];
+        v[dof] = u[dof];
+    }
+}
+
+__global__ void c3d10_enforce_fixed_bcs_fp32_kernel(
+    const float* __restrict__ u,
+    float*       __restrict__ v,
+    const int*   __restrict__ fixed_dofs,
+    int n_fixed_dofs
+) {
+    int tid = blockIdx.x * blockDim.x + threadIdx.x;
+    if (tid < n_fixed_dofs) {
+        int dof = fixed_dofs[tid];
+        v[dof] = u[dof];
+    }
+}
+
+WNFEA_EXPORT int hip_c3d10_matrix_free_matvec_fp64(
+    const double* h_nodes,
+    const int*    h_elements,
+    const double* h_props,
+    const double* h_u,
+    double*       h_v,
+    const int*    h_fixed_dofs,
+    int n_fixed_dofs,
+    int n_nodes,
+    int n_solids
+) {
+    if (!h_nodes || !h_elements || !h_props || !h_u || !h_v || n_nodes <= 0 || n_solids <= 0) return -1;
+    int total_dofs = n_nodes * 3;
+
+    double *d_nodes = nullptr, *d_props = nullptr, *d_u = nullptr, *d_v = nullptr;
+    int *d_elements = nullptr, *d_fixed_dofs = nullptr;
+    uint8_t* d_is_fixed_mask = nullptr;
+
+    HIP_CHECK(hipMalloc(&d_nodes,    n_nodes * 3 * sizeof(double)));
+    HIP_CHECK(hipMalloc(&d_elements, n_solids * 10 * sizeof(int)));
+    HIP_CHECK(hipMalloc(&d_props,    n_solids * 2 * sizeof(double)));
+    HIP_CHECK(hipMalloc(&d_u,        total_dofs * sizeof(double)));
+    HIP_CHECK(hipMalloc(&d_v,        total_dofs * sizeof(double)));
+
+    HIP_CHECK(hipMemcpy(d_nodes,    h_nodes,    n_nodes * 3 * sizeof(double), hipMemcpyHostToDevice));
+    HIP_CHECK(hipMemcpy(d_elements, h_elements, n_solids * 10 * sizeof(int), hipMemcpyHostToDevice));
+    HIP_CHECK(hipMemcpy(d_props,    h_props,    n_solids * 2 * sizeof(double), hipMemcpyHostToDevice));
+    HIP_CHECK(hipMemcpy(d_u,        h_u,        total_dofs * sizeof(double), hipMemcpyHostToDevice));
+    HIP_CHECK(hipMemset(d_v, 0,                 total_dofs * sizeof(double)));
+
+    if (n_fixed_dofs > 0 && h_fixed_dofs) {
+        std::vector<uint8_t> h_mask(total_dofs, 0);
+        for (int i = 0; i < n_fixed_dofs; ++i) {
+            int d = h_fixed_dofs[i];
+            if (d >= 0 && d < total_dofs) h_mask[d] = 1;
+        }
+        HIP_CHECK(hipMalloc(&d_is_fixed_mask, total_dofs * sizeof(uint8_t)));
+        HIP_CHECK(hipMemcpy(d_is_fixed_mask, h_mask.data(), total_dofs * sizeof(uint8_t), hipMemcpyHostToDevice));
+        HIP_CHECK(hipMalloc(&d_fixed_dofs, n_fixed_dofs * sizeof(int)));
+        HIP_CHECK(hipMemcpy(d_fixed_dofs, h_fixed_dofs, n_fixed_dofs * sizeof(int), hipMemcpyHostToDevice));
+    }
+
+    int block_size = 32;
+    int grid_size = std::min(std::max((n_solids + block_size - 1) / block_size, 60), 1920);
+
+    hipLaunchKernelGGL(c3d10_matrix_free_3dof_fp64_kernel, dim3(grid_size), dim3(block_size), 0, 0,
+                       d_nodes, d_elements, d_props, d_u, d_v, d_is_fixed_mask, n_solids);
+
+    if (n_fixed_dofs > 0 && d_fixed_dofs) {
+        int bc_threads = 128;
+        int bc_blocks = (n_fixed_dofs + bc_threads - 1) / bc_threads;
+        hipLaunchKernelGGL(c3d10_enforce_fixed_bcs_fp64_kernel, dim3(bc_blocks), dim3(bc_threads), 0, 0,
+                           d_u, d_v, d_fixed_dofs, n_fixed_dofs);
+    }
+
+    HIP_CHECK(hipDeviceSynchronize());
+    HIP_CHECK(hipMemcpy(h_v, d_v, total_dofs * sizeof(double), hipMemcpyDeviceToHost));
+
+    hipFree(d_nodes);
+    hipFree(d_elements);
+    hipFree(d_props);
+    hipFree(d_u);
+    hipFree(d_v);
+    if (d_is_fixed_mask) hipFree(d_is_fixed_mask);
+    if (d_fixed_dofs) hipFree(d_fixed_dofs);
+
+    return 0;
+}
+
+WNFEA_EXPORT int hip_c3d10_matrix_free_matvec_fp32(
+    const float*  h_nodes,
+    const int*    h_elements,
+    const float*  h_props,
+    const float*  h_u,
+    float*        h_v,
+    const int*    h_fixed_dofs,
+    int n_fixed_dofs,
+    int n_nodes,
+    int n_solids
+) {
+    if (!h_nodes || !h_elements || !h_props || !h_u || !h_v || n_nodes <= 0 || n_solids <= 0) return -1;
+    int total_dofs = n_nodes * 3;
+
+    float *d_nodes = nullptr, *d_props = nullptr, *d_u = nullptr, *d_v = nullptr;
+    int *d_elements = nullptr, *d_fixed_dofs = nullptr;
+    uint8_t* d_is_fixed_mask = nullptr;
+
+    HIP_CHECK(hipMalloc(&d_nodes,    n_nodes * 3 * sizeof(float)));
+    HIP_CHECK(hipMalloc(&d_elements, n_solids * 10 * sizeof(int)));
+    HIP_CHECK(hipMalloc(&d_props,    n_solids * 2 * sizeof(float)));
+    HIP_CHECK(hipMalloc(&d_u,        total_dofs * sizeof(float)));
+    HIP_CHECK(hipMalloc(&d_v,        total_dofs * sizeof(float)));
+
+    HIP_CHECK(hipMemcpy(d_nodes,    h_nodes,    n_nodes * 3 * sizeof(float), hipMemcpyHostToDevice));
+    HIP_CHECK(hipMemcpy(d_elements, h_elements, n_solids * 10 * sizeof(int), hipMemcpyHostToDevice));
+    HIP_CHECK(hipMemcpy(d_props,    h_props,    n_solids * 2 * sizeof(float), hipMemcpyHostToDevice));
+    HIP_CHECK(hipMemcpy(d_u,        h_u,        total_dofs * sizeof(float), hipMemcpyHostToDevice));
+    HIP_CHECK(hipMemset(d_v, 0,                 total_dofs * sizeof(float)));
+
+    if (n_fixed_dofs > 0 && h_fixed_dofs) {
+        std::vector<uint8_t> h_mask(total_dofs, 0);
+        for (int i = 0; i < n_fixed_dofs; ++i) {
+            int d = h_fixed_dofs[i];
+            if (d >= 0 && d < total_dofs) h_mask[d] = 1;
+        }
+        HIP_CHECK(hipMalloc(&d_is_fixed_mask, total_dofs * sizeof(uint8_t)));
+        HIP_CHECK(hipMemcpy(d_is_fixed_mask, h_mask.data(), total_dofs * sizeof(uint8_t), hipMemcpyHostToDevice));
+        HIP_CHECK(hipMalloc(&d_fixed_dofs, n_fixed_dofs * sizeof(int)));
+        HIP_CHECK(hipMemcpy(d_fixed_dofs, h_fixed_dofs, n_fixed_dofs * sizeof(int), hipMemcpyHostToDevice));
+    }
+
+    int block_size = 32;
+    int grid_size = std::min(std::max((n_solids + block_size - 1) / block_size, 60), 1920);
+
+    hipLaunchKernelGGL(c3d10_matrix_free_3dof_fp32_kernel, dim3(grid_size), dim3(block_size), 0, 0,
+                       d_nodes, d_elements, d_props, d_u, d_v, d_is_fixed_mask, n_solids);
+
+    if (n_fixed_dofs > 0 && d_fixed_dofs) {
+        int bc_threads = 128;
+        int bc_blocks = (n_fixed_dofs + bc_threads - 1) / bc_threads;
+        hipLaunchKernelGGL(c3d10_enforce_fixed_bcs_fp32_kernel, dim3(bc_blocks), dim3(bc_threads), 0, 0,
+                           d_u, d_v, d_fixed_dofs, n_fixed_dofs);
+    }
+
+    HIP_CHECK(hipDeviceSynchronize());
+    HIP_CHECK(hipMemcpy(h_v, d_v, total_dofs * sizeof(float), hipMemcpyDeviceToHost));
+
+    hipFree(d_nodes);
+    hipFree(d_elements);
+    hipFree(d_props);
+    hipFree(d_u);
+    hipFree(d_v);
+    if (d_is_fixed_mask) hipFree(d_is_fixed_mask);
+    if (d_fixed_dofs) hipFree(d_fixed_dofs);
 
     return 0;
 }
