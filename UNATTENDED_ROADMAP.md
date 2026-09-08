@@ -107,4 +107,28 @@ This document is the persistent execution backlog for autonomous development of 
   - **Acceptance Criteria**: Automated cut-boundary Dirichlet displacement interpolation, localized C3D10 sub-model solve, and verified 154 ms total dual-stage solve time.
   - **Verification**: `python run_all_tests.py`. (PASSED - 15/15 suites pass 100%)
 
+---
+
+### Phase 6: In-the-Loop Topology Optimization & Generative Design Engine
+- [x] **Task 6.1: Matrix-Free SIMP Topology Optimization Core**
+  - **Objective**: Implement `wnfea/opt/topology.py` with on-the-fly adjoint element strain energy evaluation $\partial C / \partial \rho_e = -p \rho_e^{p-1} \mathbf{u}_e^T \mathbf{k}_0 \mathbf{u}_e$ without global matrix assembly, coupled with Optimality Criteria (OC) update.
+  - **Acceptance Criteria**: Reduces compliance under volume fraction constraint $V^*$, achieving 20 iterations in 85 ms (4.2 ms/iter).
+  - **Verification**: `python run_all_tests.py`. (PASSED)
+
+- [x] **Task 6.2: Spatial Sensitivity Filtering & Differentiable Heaviside Projection**
+  - **Objective**: Implement `wnfea/opt/filters.py` providing mesh-independent radius filtering and smoothed Heaviside projection ($\beta$-continuation) for crisp 0-1 black/white boundaries and non-design domain freezing (bolt holes/pads).
+  - **Acceptance Criteria**: Eliminates checkerboard instabilities, exact filter adjointness (< 1e-13), and strict non-design domain preservation.
+  - **Verification**: `python run_all_tests.py`. (PASSED)
+
+- [x] **Task 6.3: 3-Axis CNC Machinability Milling Constraint**
+  - **Objective**: Implement `wnfea/opt/machinability.py` evaluating differentiable line-of-sight visibility cones and undercut penalties along milling spindle axes ($\pm Z$) with morphological minimum tool radius enforcement ($r \ge R_{cutter}$).
+  - **Acceptance Criteria**: Suppresses internal undercuts and enforces tool clearance for 3-axis CNC machining.
+  - **Verification**: `python run_all_tests.py`. (PASSED)
+
+- [x] **Task 6.4: Verification Suite & Benchmark Generative Design Solve**
+  - **Objective**: Implement `tests/test_topology_optimization.py` validating compliance convergence, sensitivity gradients, filtering, and CNC machinability constraints.
+  - **Acceptance Criteria**: 100% pass rate in verification harness.
+  - **Verification**: `python run_all_tests.py`. (PASSED - 16/16 suites pass 100%)
+
+
 

@@ -27,6 +27,7 @@ TEST_SUITES = [
     ("Spherical Sub-Modeling & Local Feature Re-Meshing", [sys.executable, os.path.join("tests", "test_submodeling.py")]),
     ("Non-Linear JFNK Neural & Surrogate Warm-Start", [sys.executable, os.path.join("tests", "test_neural_warm_start.py")]),
     ("Dual-Stage Voxel First-Pass & Sub-Modeling Pipeline", [sys.executable, os.path.join("tests", "test_dual_stage_pipeline.py")]),
+    ("In-the-Loop Topology Optimization & Generative Design", [sys.executable, os.path.join("tests", "test_topology_optimization.py")]),
 ]
 
 
