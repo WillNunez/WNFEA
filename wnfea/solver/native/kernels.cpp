@@ -375,4 +375,94 @@ WNFEA_EXPORT void compute_c3d10_internal_forces_native(
     }
 }
 
+// ============================================================================
+// C3D10 Exact Stiffness Diagonal Kernel (for Jacobi / Multigrid Preconditioners)
+// ============================================================================
+WNFEA_EXPORT void compute_c3d10_diagonal_native(
+    const double* __restrict nodes,
+    const int* __restrict solid_elements,
+    const double* __restrict props,      // [E_solids * 2] (E, nu)
+    double* __restrict diag_K,           // [n_nodes * 3]
+    int n_solids,
+    int n_nodes
+) {
+    double dN_dxi_gp[4][3][10];
+    for (int g = 0; g < 4; ++g) {
+        evaluate_dN_dxi_c3d10(GAUSS_XI[g], GAUSS_ETA[g], GAUSS_ZETA[g], dN_dxi_gp[g]);
+    }
+
+    for (int e = 0; e < n_solids; ++e) {
+        const int* elem_nodes = &solid_elements[e * 10];
+        const double E_mod = props[e * 2 + 0];
+        const double nu    = props[e * 2 + 1];
+
+        // Isotropic elasticity constants
+        const double factor = E_mod / ((1.0 + nu) * (1.0 - 2.0 * nu));
+        const double c11 = factor * (1.0 - nu);
+        const double c44 = factor * 0.5 * (1.0 - 2.0 * nu);
+
+        double coords[10][3];
+        for (int i = 0; i < 10; ++i) {
+            const int nid = elem_nodes[i];
+            coords[i][0] = nodes[nid * 3 + 0];
+            coords[i][1] = nodes[nid * 3 + 1];
+            coords[i][2] = nodes[nid * 3 + 2];
+        }
+
+        for (int g = 0; g < 4; ++g) {
+            const auto& dN_dxi = dN_dxi_gp[g];
+
+            double J[3][3] = { {0.0} };
+            for (int i = 0; i < 10; ++i) {
+                J[0][0] += dN_dxi[0][i] * coords[i][0];
+                J[0][1] += dN_dxi[0][i] * coords[i][1];
+                J[0][2] += dN_dxi[0][i] * coords[i][2];
+
+                J[1][0] += dN_dxi[1][i] * coords[i][0];
+                J[1][1] += dN_dxi[1][i] * coords[i][1];
+                J[1][2] += dN_dxi[1][i] * coords[i][2];
+
+                J[2][0] += dN_dxi[2][i] * coords[i][0];
+                J[2][1] += dN_dxi[2][i] * coords[i][1];
+                J[2][2] += dN_dxi[2][i] * coords[i][2];
+            }
+
+            const double c00 = J[1][1] * J[2][2] - J[1][2] * J[2][1];
+            const double c01 = J[1][2] * J[2][0] - J[1][0] * J[2][2];
+            const double c02 = J[1][0] * J[2][1] - J[1][1] * J[2][0];
+
+            const double detJ = J[0][0] * c00 + J[0][1] * c01 + J[0][2] * c02;
+            if (std::abs(detJ) < 1e-15) continue;
+            const double inv_detJ = 1.0 / detJ;
+
+            const double invJ[3][3] = {
+                { c00 * inv_detJ, (J[0][2]*J[2][1] - J[0][1]*J[2][2]) * inv_detJ, (J[0][1]*J[1][2] - J[0][2]*J[1][1]) * inv_detJ },
+                { c01 * inv_detJ, (J[0][0]*J[2][2] - J[0][2]*J[2][0]) * inv_detJ, (J[0][2]*J[1][0] - J[0][0]*J[1][2]) * inv_detJ },
+                { c02 * inv_detJ, (J[0][1]*J[2][0] - J[0][0]*J[2][1]) * inv_detJ, (J[0][0]*J[1][1] - J[0][1]*J[1][0]) * inv_detJ }
+            };
+
+            const double w_detJ = WEIGHT * detJ;
+
+            for (int i = 0; i < 10; ++i) {
+                const double dNx = invJ[0][0] * dN_dxi[0][i] + invJ[0][1] * dN_dxi[1][i] + invJ[0][2] * dN_dxi[2][i];
+                const double dNy = invJ[1][0] * dN_dxi[0][i] + invJ[1][1] * dN_dxi[1][i] + invJ[1][2] * dN_dxi[2][i];
+                const double dNz = invJ[2][0] * dN_dxi[0][i] + invJ[2][1] * dN_dxi[1][i] + invJ[2][2] * dN_dxi[2][i];
+
+                const double dNx2 = dNx * dNx;
+                const double dNy2 = dNy * dNy;
+                const double dNz2 = dNz * dNz;
+
+                const double kxx = w_detJ * (c11 * dNx2 + c44 * (dNy2 + dNz2));
+                const double kyy = w_detJ * (c11 * dNy2 + c44 * (dNx2 + dNz2));
+                const double kzz = w_detJ * (c11 * dNz2 + c44 * (dNx2 + dNy2));
+
+                const int nid = elem_nodes[i];
+                diag_K[nid * 3 + 0] += kxx;
+                diag_K[nid * 3 + 1] += kyy;
+                diag_K[nid * 3 + 2] += kzz;
+            }
+        }
+    }
+}
+
 } // extern "C"

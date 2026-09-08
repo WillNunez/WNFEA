@@ -21,7 +21,9 @@ TEST_SUITES = [
     ("Non-Linear JFNK and AMG Large Deflection", [sys.executable, "test_nonlinear_jfnk.py"]),
     ("Matrix-Free C3D10 Operator & PCG Parity", [sys.executable, os.path.join("tests", "test_matrix_free_c3d10.py")]),
     ("Two-Level Geometric p-Multigrid Preconditioner", [sys.executable, os.path.join("tests", "test_pmultigrid.py")]),
+    ("Heterogeneous Subsystem Assembly and PCG Solver", [sys.executable, os.path.join("tests", "test_heterogeneous.py")]),
 ]
+
 
 
 TIMEOUT_SECONDS = 90  # 90-second safety timeout per suite

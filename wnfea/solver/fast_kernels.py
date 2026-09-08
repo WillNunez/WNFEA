@@ -87,6 +87,11 @@ def _get_native_lib():
                 ctypes.c_void_p, ctypes.c_void_p, ctypes.c_void_p, ctypes.c_void_p,
                 ctypes.c_void_p, ctypes.c_int, ctypes.c_int
             ]
+            if hasattr(lib, "compute_c3d10_diagonal_native"):
+                lib.compute_c3d10_diagonal_native.argtypes = [
+                    ctypes.c_void_p, ctypes.c_void_p, ctypes.c_void_p,
+                    ctypes.c_void_p, ctypes.c_int, ctypes.c_int
+                ]
             _NATIVE_LIB = lib
         except Exception:
             _NATIVE_LIB = None
@@ -977,4 +982,65 @@ def hip_c3d10_matrix_free_matvec(
         return h_v
 
 
+def compute_c3d10_diagonal_fast(
+    nodes: np.ndarray,
+    elements: np.ndarray,
+    props: np.ndarray,
+    diag_out: np.ndarray | None = None,
+) -> np.ndarray:
+    """
+    High-performance exact stiffness diagonal computation for C3D10 solid elements.
+    Uses native C++ SIMD kernel when available, with scalar/chunked fallback.
 
+    Args:
+        nodes: (N, 3) float64 array of nodal coordinates.
+        elements: (E, 10) int32 array of element node indices.
+        props: (E, 2) float64 array of element material properties [E, nu].
+        diag_out: (N * 3,) float64 array (optional, allocated if None).
+
+    Returns:
+        diag: (N * 3,) exact stiffness diagonal.
+    """
+    n_nodes = len(nodes)
+    n_solids = len(elements)
+    total_dofs = n_nodes * 3
+
+    if diag_out is None:
+        diag = np.zeros(total_dofs, dtype=np.float64)
+    else:
+        diag = diag_out
+        diag.fill(0.0)
+
+    lib = _get_native_lib()
+    if lib is not None and hasattr(lib, "compute_c3d10_diagonal_native"):
+        h_nodes = np.ascontiguousarray(nodes, dtype=np.float64)
+        h_elems = np.ascontiguousarray(elements, dtype=np.int32)
+        h_props = np.ascontiguousarray(props, dtype=np.float64)
+        h_diag = np.ascontiguousarray(diag, dtype=np.float64)
+
+        lib.compute_c3d10_diagonal_native(
+            h_nodes.ctypes.data,
+            h_elems.ctypes.data,
+            h_props.ctypes.data,
+            h_diag.ctypes.data,
+            ctypes.c_int(n_solids),
+            ctypes.c_int(n_nodes),
+        )
+        if diag_out is not None and diag_out is not h_diag:
+            diag_out[:] = h_diag
+        return h_diag
+
+    # Fallback: elemental loop
+    from ..elements.c3d10 import element_stiffness_c3d10
+    elem_dofs = np.zeros((n_solids, 30), dtype=np.int64)
+    for i in range(10):
+        elem_dofs[:, i * 3 + 0] = elements[:, i] * 3 + 0
+        elem_dofs[:, i * 3 + 1] = elements[:, i] * 3 + 1
+        elem_dofs[:, i * 3 + 2] = elements[:, i] * 3 + 2
+
+    for e_idx in range(n_solids):
+        coords = nodes[elements[e_idx]]
+        Ke = element_stiffness_c3d10(coords, props[e_idx, 0], props[e_idx, 1])
+        np.add.at(diag, elem_dofs[e_idx], np.diag(Ke))
+
+    return diag

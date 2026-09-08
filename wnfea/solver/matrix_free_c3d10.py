@@ -35,7 +35,7 @@ class MatrixFreeC3D10Operator(LinearOperator):
         self,
         model: FEAModel,
         apply_bcs: bool = True,
-        precompute_Ke: bool = True,
+        precompute_Ke: bool = False,
         device: str = "auto",
         dtype: Optional[np.dtype] = None,
         precision: str = "fp64",
@@ -122,15 +122,16 @@ class MatrixFreeC3D10Operator(LinearOperator):
             elem_diags = np.diagonal(self.Ke_batch, axis1=1, axis2=2)
             np.add.at(self.diag_K, self.flat_elem_dofs, elem_diags.ravel())
         else:
-            for e_idx, node_indices in enumerate(model.solid_elements):
-                coords = model.mesh_nodes[node_indices]
-                Ke = element_stiffness_c3d10(coords, self.props_c[e_idx, 0], self.props_c[e_idx, 1])
-                np.add.at(self.diag_K, self.elem_dofs[e_idx], np.diag(Ke))
+            from .fast_kernels import compute_c3d10_diagonal_fast
+            self.diag_K = compute_c3d10_diagonal_fast(
+                self.nodes_c, self.elements_c, self.props_c, self.diag_K
+            )
 
         if self.apply_bcs and len(self.fixed_dofs) > 0:
             self.diag_K[self.fixed_dofs] = 1.0
 
-        self.inv_diag_K = np.where(self.diag_K != 0.0, 1.0 / self.diag_K, 1.0)
+        safe_diag = np.where(np.abs(self.diag_K) > 1e-30, self.diag_K, 1.0)
+        self.inv_diag_K = np.where(np.abs(self.diag_K) > 1e-30, 1.0 / safe_diag, 1.0)
 
         super().__init__(shape=(self.n_dofs, self.n_dofs), dtype=dtype)
 

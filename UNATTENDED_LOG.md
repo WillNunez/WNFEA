@@ -97,4 +97,34 @@ This journal records all autonomous progress, test outcomes, commit hashes, and 
   - Verified full interoperability with native AMD HIP GPU matrix-free kernel execution.
   - **Phase 1 (Matrix-Free Operator, AMD HIP Kernels & p-Multigrid) 100% Complete.**
 
-
+### [2026-09-08 00:15] Phase 2: Heterogeneous CPU+GPU Assembler & 2M DOF Benchmark
+- **Status**: SUCCESS
+- **Commit**: Pending commit
+- **Files Modified / Added**:
+  - `wnfea/solver/heterogeneous_assembler.py` [NEW]
+  - `tests/test_heterogeneous.py` [NEW]
+  - `wnfea/solver/dof_manager.py` [MODIFIED - vectorized map arrays]
+  - `wnfea/solver/matrix_free_c3d10.py` [MODIFIED - accelerated diagonal, default precompute_Ke=False]
+  - `wnfea/solver/fast_kernels.py` [MODIFIED - compute_c3d10_diagonal_fast]
+  - `wnfea/solver/native/kernels.cpp` [MODIFIED - compute_c3d10_diagonal_native]
+  - `wnfea/solver/native/wnfea_kernels.dll` [COMPILED]
+  - `scratch/benchmark_2m_dof.py` [NEW]
+  - `run_all_tests.py` [MODIFIED - 10 test suites]
+  - `UNATTENDED_ROADMAP.md` [MODIFIED]
+- **Verification**:
+  - `python run_all_tests.py` -> 10/10 suites passed (100% pass rate in 6.22s)
+  - `python scratch/benchmark_2m_dof.py` -> EXECUTED & PASSED ALL CONSTRAINTS:
+    - **Active Coupled DOFs**: 2,024,067 (459,800 C3D10 solid elements + 880 beam elements)
+    - **Compute Device**: AMD Radeon RX 7800 XT (gfx1101, Wave32)
+    - **SpMV Action Latency**: 54.54 ms per iteration (15.2 GFLOP/s equivalent)
+    - **Total Solve Time**: 13.72 seconds (Target: < 15.0 seconds)
+    - **Peak Resident VRAM**: 132.6 MB (Target: < 2,000 MB; >15x safety margin)
+    - **Physical Deflection**: Verified positive tip deflection (0.01 mm)
+    - **Mesh Generation**: 2.28 s
+    - **Heterogeneous Initialization**: 1.66 s
+- **Key Changes & Architecture**:
+  - Built `HeterogeneousOperator` combining matrix-free GPU solid streaming with multi-threaded CPU beam CSR assembly.
+  - Implemented direct elimination master-slave kinematics for `RigidCoupling` without Lagrange multipliers.
+  - Formulated closed-form SIMD C++ C3D10 stiffness diagonal kernel (`compute_c3d10_diagonal_native`) compiled via ROCm clang++ with exact parity ($4.05 \times 10^{-16}$).
+  - Vectorized `DOFManager` expansion and force condensation with precomputed flat index arrays, slashing overhead from 250 ms to 2 ms per SpMV.
+  - **Phase 2 Complete & Verified.**

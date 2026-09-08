@@ -78,6 +78,9 @@ class DOFManager:
                 global_idx += 1
 
         self.total_active_dofs = global_idx
+        self.map_nodes = np.array([item[0] for item in self.global_to_node_dof], dtype=np.int32)
+        self.map_dofs = np.array([item[1] for item in self.global_to_node_dof], dtype=np.int32)
+        self.flat_active_indices = self.map_nodes * 6 + self.map_dofs
 
     def expand_displacements(self, u_active: np.ndarray) -> np.ndarray:
         """
@@ -87,9 +90,8 @@ class DOFManager:
         """
         u_full = np.zeros((self.n_nodes, 6), dtype=np.float64)
 
-        # 1. Fill independent active DOFs
-        for g_idx, (node_id, local_dof) in enumerate(self.global_to_node_dof):
-            u_full[node_id, local_dof] = u_active[g_idx]
+        # 1. Vectorized fill of independent active DOFs
+        u_full[self.map_nodes, self.map_dofs] = u_active
 
         # 2. Kinematic substitution for slave nodes: u_s = T_i * [u_m; theta_m]
         couplings = getattr(self.model, "couplings", [])
@@ -131,12 +133,8 @@ class DOFManager:
                 # Moment equilibrium: M_m += r x F_s
                 f_work[m_id, 3:6] += np.cross(r, f_slave)
 
-        # Extract only active independent DOFs
-        f_active = np.zeros(self.total_active_dofs, dtype=np.float64)
-        for g_idx, (node_id, local_dof) in enumerate(self.global_to_node_dof):
-            f_active[g_idx] = f_work[node_id, local_dof]
-
-        return f_active
+        # Vectorized extraction of active independent DOFs
+        return f_work[self.map_nodes, self.map_dofs]
 
     def build_projection_matrix(self) -> np.ndarray:
         """
