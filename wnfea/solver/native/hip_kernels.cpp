@@ -429,6 +429,7 @@ __global__ void c3d10_internal_forces_kernel(
 // Wave32-Tiled Sparse Matrix-Vector Multiplication (CSR SpMV)
 // Tile size: 256 threads (8 Wave32 waves per block)
 // ============================================================================
+// Vector-4 CSR SpMV (4 threads per row, sub-warp coalesced memory access)
 __launch_bounds__(256, 4)
 __global__ void spmv_csr_kernel(
     int num_rows,
@@ -440,30 +441,85 @@ __global__ void spmv_csr_kernel(
     double alpha,
     double beta
 ) {
-    int row = blockIdx.x * blockDim.x + threadIdx.x;
-    int stride = blockDim.x * gridDim.x;
+    int tid = blockIdx.x * blockDim.x + threadIdx.x;
+    int subwarp_id = tid >> 2;
+    int lane = tid & 3;
+    int total_subwarps = (blockDim.x * gridDim.x) >> 2;
 
-    for (int r = row; r < num_rows; r += stride) {
+    for (int r = subwarp_id; r < num_rows; r += total_subwarps) {
         int start = row_ptr[r];
         int end   = row_ptr[r + 1];
         double sum = 0.0;
-        for (int j = start; j < end; ++j) {
+        for (int j = start + lane; j < end; j += 4) {
             sum += values[j] * x[col_idx[j]];
         }
-        if (beta == 0.0) {
-            y[r] = alpha * sum;
-        } else {
-            y[r] = alpha * sum + beta * y[r];
+        sum += __shfl_down(sum, 2, 32);
+        sum += __shfl_down(sum, 1, 32);
+
+        if (lane == 0) {
+            if (beta == 0.0) {
+                y[r] = alpha * sum;
+            } else {
+                y[r] = alpha * sum + beta * y[r];
+            }
         }
     }
 }
 
 // ============================================================================
-// GPU Algebraic Multigrid (AMG) V-Cycle Kernels
+// GPU Algebraic Multigrid (AMG) V-Cycle Kernels (Vector-4 Sub-Warp Optimized)
 // Native Wave32 execution: Jacobi smoothing, defect, prolongation & restriction
 // ============================================================================
 
-// 1. Damped Jacobi Smoother (FP64)
+// 0. Vectorized Scale-Multiply for Zero-Initial Guess Down-Sweep Smoother
+// x_out[r] = omega * inv_diag[r] * b[r] (full coalesced 624 GB/s bandwidth)
+__launch_bounds__(256, 4)
+__global__ void vec_scale_mul_f64_kernel(
+    int n,
+    double omega,
+    const double* __restrict__ inv_diag,
+    const double* __restrict__ b,
+    double*       __restrict__ x
+) {
+    int idx = blockIdx.x * blockDim.x + threadIdx.x;
+    int stride = blockDim.x * gridDim.x;
+    for (int i = idx; i < n; i += stride) {
+        x[i] = omega * inv_diag[i] * b[i];
+    }
+}
+
+__launch_bounds__(256, 4)
+__global__ void vec_scale_mul_fp32_kernel(
+    int n,
+    float omega,
+    const float* __restrict__ inv_diag,
+    const float* __restrict__ b,
+    float*       __restrict__ x
+) {
+    int idx = blockIdx.x * blockDim.x + threadIdx.x;
+    int stride = blockDim.x * gridDim.x;
+    for (int i = idx; i < n; i += stride) {
+        x[i] = omega * inv_diag[i] * b[i];
+    }
+}
+
+__launch_bounds__(256, 4)
+__global__ void vec_scale_mul_fp16_kernel(
+    int n,
+    float omega,
+    const __half* __restrict__ inv_diag,
+    const __half* __restrict__ b,
+    __half*       __restrict__ x
+) {
+    int idx = blockIdx.x * blockDim.x + threadIdx.x;
+    int stride = blockDim.x * gridDim.x;
+    for (int i = idx; i < n; i += stride) {
+        float val = omega * __half2float(inv_diag[i]) * __half2float(b[i]);
+        x[i] = __float2half(val);
+    }
+}
+
+// 1. Damped Jacobi Smoother (FP64, Vector-4)
 // x_out[r] = (x_in ? x_in[r] : 0) + omega * inv_diag[r] * (b[r] - A * x_in)
 __launch_bounds__(256, 4)
 __global__ void jacobi_smooth_csr_kernel(
@@ -477,26 +533,36 @@ __global__ void jacobi_smooth_csr_kernel(
     double*       __restrict__ x_out,
     double omega
 ) {
-    int row = blockIdx.x * blockDim.x + threadIdx.x;
-    int stride = blockDim.x * gridDim.x;
+    int tid = blockIdx.x * blockDim.x + threadIdx.x;
+    int subwarp_id = tid >> 2;
+    int lane = tid & 3;
+    int total_subwarps = (blockDim.x * gridDim.x) >> 2;
 
-    for (int r = row; r < num_rows; r += stride) {
+    for (int r = subwarp_id; r < num_rows; r += total_subwarps) {
         int start = row_ptr[r];
         int end   = row_ptr[r + 1];
+
         if (x_in != nullptr) {
             double sum = 0.0;
-            for (int j = start; j < end; ++j) {
+            for (int j = start + lane; j < end; j += 4) {
                 sum += values[j] * x_in[col_idx[j]];
             }
-            double res = b[r] - sum;
-            x_out[r] = x_in[r] + omega * inv_diag[r] * res;
+            sum += __shfl_down(sum, 2, 32);
+            sum += __shfl_down(sum, 1, 32);
+
+            if (lane == 0) {
+                double res = b[r] - sum;
+                x_out[r] = x_in[r] + omega * inv_diag[r] * res;
+            }
         } else {
-            x_out[r] = omega * inv_diag[r] * b[r];
+            if (lane == 0) {
+                x_out[r] = omega * inv_diag[r] * b[r];
+            }
         }
     }
 }
 
-// Damped Jacobi Smoother (FP32)
+// Damped Jacobi Smoother (FP32, Vector-4)
 __launch_bounds__(256, 4)
 __global__ void jacobi_smooth_csr_fp32_kernel(
     int num_rows,
@@ -509,26 +575,36 @@ __global__ void jacobi_smooth_csr_fp32_kernel(
     float*       __restrict__ x_out,
     float omega
 ) {
-    int row = blockIdx.x * blockDim.x + threadIdx.x;
-    int stride = blockDim.x * gridDim.x;
+    int tid = blockIdx.x * blockDim.x + threadIdx.x;
+    int subwarp_id = tid >> 2;
+    int lane = tid & 3;
+    int total_subwarps = (blockDim.x * gridDim.x) >> 2;
 
-    for (int r = row; r < num_rows; r += stride) {
+    for (int r = subwarp_id; r < num_rows; r += total_subwarps) {
         int start = row_ptr[r];
         int end   = row_ptr[r + 1];
+
         if (x_in != nullptr) {
             float sum = 0.0f;
-            for (int j = start; j < end; ++j) {
+            for (int j = start + lane; j < end; j += 4) {
                 sum += values[j] * x_in[col_idx[j]];
             }
-            float res = b[r] - sum;
-            x_out[r] = x_in[r] + omega * inv_diag[r] * res;
+            sum += __shfl_down(sum, 2, 32);
+            sum += __shfl_down(sum, 1, 32);
+
+            if (lane == 0) {
+                float res = b[r] - sum;
+                x_out[r] = x_in[r] + omega * inv_diag[r] * res;
+            }
         } else {
-            x_out[r] = omega * inv_diag[r] * b[r];
+            if (lane == 0) {
+                x_out[r] = omega * inv_diag[r] * b[r];
+            }
         }
     }
 }
 
-// Damped Jacobi Smoother (FP16 storage, FP32 accumulation)
+// Damped Jacobi Smoother (FP16 storage, FP32 accumulation, Vector-4)
 __launch_bounds__(256, 4)
 __global__ void jacobi_smooth_csr_fp16_kernel(
     int num_rows,
@@ -541,28 +617,38 @@ __global__ void jacobi_smooth_csr_fp16_kernel(
     __half*       __restrict__ x_out,
     float omega
 ) {
-    int row = blockIdx.x * blockDim.x + threadIdx.x;
-    int stride = blockDim.x * gridDim.x;
+    int tid = blockIdx.x * blockDim.x + threadIdx.x;
+    int subwarp_id = tid >> 2;
+    int lane = tid & 3;
+    int total_subwarps = (blockDim.x * gridDim.x) >> 2;
 
-    for (int r = row; r < num_rows; r += stride) {
+    for (int r = subwarp_id; r < num_rows; r += total_subwarps) {
         int start = row_ptr[r];
         int end   = row_ptr[r + 1];
+
         if (x_in != nullptr) {
             float sum = 0.0f;
-            for (int j = start; j < end; ++j) {
+            for (int j = start + lane; j < end; j += 4) {
                 sum += __half2float(values[j]) * __half2float(x_in[col_idx[j]]);
             }
-            float res = __half2float(b[r]) - sum;
-            float x_new = __half2float(x_in[r]) + omega * __half2float(inv_diag[r]) * res;
-            x_out[r] = __float2half(x_new);
+            sum += __shfl_down(sum, 2, 32);
+            sum += __shfl_down(sum, 1, 32);
+
+            if (lane == 0) {
+                float res = __half2float(b[r]) - sum;
+                float x_new = __half2float(x_in[r]) + omega * __half2float(inv_diag[r]) * res;
+                x_out[r] = __float2half(x_new);
+            }
         } else {
-            float x_new = omega * __half2float(inv_diag[r]) * __half2float(b[r]);
-            x_out[r] = __float2half(x_new);
+            if (lane == 0) {
+                float x_new = omega * __half2float(inv_diag[r]) * __half2float(b[r]);
+                x_out[r] = __float2half(x_new);
+            }
         }
     }
 }
 
-// 2. Defect Computation res = b - A * x
+// 2. Defect Computation res = b - A * x (Vector-4)
 __launch_bounds__(256, 4)
 __global__ void defect_csr_kernel(
     int num_rows,
@@ -573,17 +659,24 @@ __global__ void defect_csr_kernel(
     const double* __restrict__ x,
     double*       __restrict__ res
 ) {
-    int row = blockIdx.x * blockDim.x + threadIdx.x;
-    int stride = blockDim.x * gridDim.x;
+    int tid = blockIdx.x * blockDim.x + threadIdx.x;
+    int subwarp_id = tid >> 2;
+    int lane = tid & 3;
+    int total_subwarps = (blockDim.x * gridDim.x) >> 2;
 
-    for (int r = row; r < num_rows; r += stride) {
+    for (int r = subwarp_id; r < num_rows; r += total_subwarps) {
         int start = row_ptr[r];
         int end   = row_ptr[r + 1];
         double sum = 0.0;
-        for (int j = start; j < end; ++j) {
+        for (int j = start + lane; j < end; j += 4) {
             sum += values[j] * x[col_idx[j]];
         }
-        res[r] = b[r] - sum;
+        sum += __shfl_down(sum, 2, 32);
+        sum += __shfl_down(sum, 1, 32);
+
+        if (lane == 0) {
+            res[r] = b[r] - sum;
+        }
     }
 }
 
@@ -597,17 +690,24 @@ __global__ void defect_csr_fp32_kernel(
     const float* __restrict__ x,
     float*       __restrict__ res
 ) {
-    int row = blockIdx.x * blockDim.x + threadIdx.x;
-    int stride = blockDim.x * gridDim.x;
+    int tid = blockIdx.x * blockDim.x + threadIdx.x;
+    int subwarp_id = tid >> 2;
+    int lane = tid & 3;
+    int total_subwarps = (blockDim.x * gridDim.x) >> 2;
 
-    for (int r = row; r < num_rows; r += stride) {
+    for (int r = subwarp_id; r < num_rows; r += total_subwarps) {
         int start = row_ptr[r];
         int end   = row_ptr[r + 1];
         float sum = 0.0f;
-        for (int j = start; j < end; ++j) {
+        for (int j = start + lane; j < end; j += 4) {
             sum += values[j] * x[col_idx[j]];
         }
-        res[r] = b[r] - sum;
+        sum += __shfl_down(sum, 2, 32);
+        sum += __shfl_down(sum, 1, 32);
+
+        if (lane == 0) {
+            res[r] = b[r] - sum;
+        }
     }
 }
 
@@ -621,22 +721,31 @@ __global__ void defect_csr_fp16_kernel(
     const __half* __restrict__ x,
     __half*       __restrict__ res
 ) {
-    int row = blockIdx.x * blockDim.x + threadIdx.x;
-    int stride = blockDim.x * gridDim.x;
+    int tid = blockIdx.x * blockDim.x + threadIdx.x;
+    int subwarp_id = tid >> 2;
+    int lane = tid & 3;
+    int total_subwarps = (blockDim.x * gridDim.x) >> 2;
 
-    for (int r = row; r < num_rows; r += stride) {
+    for (int r = subwarp_id; r < num_rows; r += total_subwarps) {
         int start = row_ptr[r];
         int end   = row_ptr[r + 1];
         float sum = 0.0f;
-        for (int j = start; j < end; ++j) {
+        for (int j = start + lane; j < end; j += 4) {
             sum += __half2float(values[j]) * __half2float(x[col_idx[j]]);
         }
-        float r_val = __half2float(b[r]) - sum;
-        res[r] = __float2half(r_val);
+        sum += __shfl_down(sum, 2, 32);
+        sum += __shfl_down(sum, 1, 32);
+
+        if (lane == 0) {
+            float r_val = __half2float(b[r]) - sum;
+            res[r] = __float2half(r_val);
+        }
     }
 }
 
-// 3. Fused Prolongation + Accumulate: x += P * e_coarse
+// 3. Fused Prolongation + Accumulate: x += P * e_coarse (Scalar per row, unroll 6)
+// Each row of P has <= 6 nonzeros (rigid body modes per node).
+// 1 thread per row eliminates shuffle instructions and delivers 4x higher warp throughput.
 __launch_bounds__(256, 4)
 __global__ void prolongation_add_kernel(
     int num_rows,
@@ -646,13 +755,14 @@ __global__ void prolongation_add_kernel(
     const double* __restrict__ e_coarse,
     double*       __restrict__ x
 ) {
-    int row = blockIdx.x * blockDim.x + threadIdx.x;
+    int r = blockIdx.x * blockDim.x + threadIdx.x;
     int stride = blockDim.x * gridDim.x;
 
-    for (int r = row; r < num_rows; r += stride) {
+    for (; r < num_rows; r += stride) {
         int start = p_row_ptr[r];
         int end   = p_row_ptr[r + 1];
         double sum = 0.0;
+        #pragma unroll 6
         for (int j = start; j < end; ++j) {
             sum += p_values[j] * e_coarse[p_col_idx[j]];
         }
@@ -669,13 +779,14 @@ __global__ void prolongation_add_fp32_kernel(
     const float* __restrict__ e_coarse,
     float*       __restrict__ x
 ) {
-    int row = blockIdx.x * blockDim.x + threadIdx.x;
+    int r = blockIdx.x * blockDim.x + threadIdx.x;
     int stride = blockDim.x * gridDim.x;
 
-    for (int r = row; r < num_rows; r += stride) {
+    for (; r < num_rows; r += stride) {
         int start = p_row_ptr[r];
         int end   = p_row_ptr[r + 1];
         float sum = 0.0f;
+        #pragma unroll 6
         for (int j = start; j < end; ++j) {
             sum += p_values[j] * e_coarse[p_col_idx[j]];
         }
@@ -692,13 +803,14 @@ __global__ void prolongation_add_fp16_kernel(
     const __half* __restrict__ e_coarse,
     __half*       __restrict__ x
 ) {
-    int row = blockIdx.x * blockDim.x + threadIdx.x;
+    int r = blockIdx.x * blockDim.x + threadIdx.x;
     int stride = blockDim.x * gridDim.x;
 
-    for (int r = row; r < num_rows; r += stride) {
+    for (; r < num_rows; r += stride) {
         int start = p_row_ptr[r];
         int end   = p_row_ptr[r + 1];
         float sum = 0.0f;
+        #pragma unroll 6
         for (int j = start; j < end; ++j) {
             sum += __half2float(p_values[j]) * __half2float(e_coarse[p_col_idx[j]]);
         }
@@ -707,7 +819,7 @@ __global__ void prolongation_add_fp16_kernel(
     }
 }
 
-// 4. SpMV in FP32 & FP16 (for restriction R * res)
+// 4. SpMV in FP32 & FP16 (for restriction R * res, Vector-4)
 __launch_bounds__(256, 4)
 __global__ void spmv_csr_fp32_kernel(
     int num_rows,
@@ -719,20 +831,27 @@ __global__ void spmv_csr_fp32_kernel(
     float alpha,
     float beta
 ) {
-    int row = blockIdx.x * blockDim.x + threadIdx.x;
-    int stride = blockDim.x * gridDim.x;
+    int tid = blockIdx.x * blockDim.x + threadIdx.x;
+    int subwarp_id = tid >> 2;
+    int lane = tid & 3;
+    int total_subwarps = (blockDim.x * gridDim.x) >> 2;
 
-    for (int r = row; r < num_rows; r += stride) {
+    for (int r = subwarp_id; r < num_rows; r += total_subwarps) {
         int start = row_ptr[r];
         int end   = row_ptr[r + 1];
         float sum = 0.0f;
-        for (int j = start; j < end; ++j) {
+        for (int j = start + lane; j < end; j += 4) {
             sum += values[j] * x[col_idx[j]];
         }
-        if (beta == 0.0f) {
-            y[r] = alpha * sum;
-        } else {
-            y[r] = alpha * sum + beta * y[r];
+        sum += __shfl_down(sum, 2, 32);
+        sum += __shfl_down(sum, 1, 32);
+
+        if (lane == 0) {
+            if (beta == 0.0f) {
+                y[r] = alpha * sum;
+            } else {
+                y[r] = alpha * sum + beta * y[r];
+            }
         }
     }
 }
@@ -746,17 +865,24 @@ __global__ void spmv_csr_fp16_kernel(
     const __half* __restrict__ x,
     __half*       __restrict__ y
 ) {
-    int row = blockIdx.x * blockDim.x + threadIdx.x;
-    int stride = blockDim.x * gridDim.x;
+    int tid = blockIdx.x * blockDim.x + threadIdx.x;
+    int subwarp_id = tid >> 2;
+    int lane = tid & 3;
+    int total_subwarps = (blockDim.x * gridDim.x) >> 2;
 
-    for (int r = row; r < num_rows; r += stride) {
+    for (int r = subwarp_id; r < num_rows; r += total_subwarps) {
         int start = row_ptr[r];
         int end   = row_ptr[r + 1];
         float sum = 0.0f;
-        for (int j = start; j < end; ++j) {
+        for (int j = start + lane; j < end; j += 4) {
             sum += __half2float(values[j]) * __half2float(x[col_idx[j]]);
         }
-        y[r] = __float2half(sum);
+        sum += __shfl_down(sum, 2, 32);
+        sum += __shfl_down(sum, 1, 32);
+
+        if (lane == 0) {
+            y[r] = __float2half(sum);
+        }
     }
 }
 
@@ -808,6 +934,586 @@ __global__ void cast_half_to_double_kernel(int n, const __half* __restrict__ in,
     int stride = blockDim.x * gridDim.x;
     for (int idx = i; idx < n; idx += stride) {
         out[idx] = (double)__half2float(in[idx]);
+    }
+}
+
+// 6. Wave32 Parallel Reduction Dot Product & BLAS-1 Vector Kernels
+__launch_bounds__(256, 4)
+__global__ void vec_dot_kernel(
+    int n,
+    const double* __restrict__ x,
+    const double* __restrict__ y,
+    double*       __restrict__ result
+) {
+    __shared__ double s_wave[8];
+    int tid = threadIdx.x;
+    int lane = tid % 32;
+    int wave_id = tid / 32;
+
+    int idx = blockIdx.x * blockDim.x + threadIdx.x;
+    int stride = blockDim.x * gridDim.x;
+
+    double sum = 0.0;
+    for (int i = idx; i < n; i += stride) {
+        sum += x[i] * y[i];
+    }
+
+    #pragma unroll
+    for (int offset = 16; offset > 0; offset /= 2) {
+        sum += __shfl_down(sum, offset, 32);
+    }
+
+    if (lane == 0) {
+        s_wave[wave_id] = sum;
+    }
+    __syncthreads();
+
+    if (wave_id == 0) {
+        double w_sum = (lane < 8) ? s_wave[lane] : 0.0;
+        #pragma unroll
+        for (int offset = 4; offset > 0; offset /= 2) {
+            w_sum += __shfl_down(w_sum, offset, 32);
+        }
+        if (lane == 0) {
+            atomicAdd(result, w_sum);
+        }
+    }
+}
+
+__launch_bounds__(256, 4)
+__global__ void vec_axpy_kernel(
+    int n,
+    double alpha,
+    const double* __restrict__ x,
+    double*       __restrict__ y
+) {
+    int idx = blockIdx.x * blockDim.x + threadIdx.x;
+    int stride = blockDim.x * gridDim.x;
+    for (int i = idx; i < n; i += stride) {
+        y[i] += alpha * x[i];
+    }
+}
+
+__launch_bounds__(256, 4)
+__global__ void vec_xpay_kernel(
+    int n,
+    const double* __restrict__ x,
+    double beta,
+    double*       __restrict__ y
+) {
+    int idx = blockIdx.x * blockDim.x + threadIdx.x;
+    int stride = blockDim.x * gridDim.x;
+    for (int i = idx; i < n; i += stride) {
+        y[i] = x[i] + beta * y[i];
+    }
+}
+
+// 7. Fused PCG Solution/Residual Update & Norm Reduction Kernel
+__launch_bounds__(256, 4)
+__global__ void vec_pcg_update_and_norm_kernel(
+    int n,
+    double alpha,
+    const double* __restrict__ p,
+    const double* __restrict__ q,
+    double*       __restrict__ u,
+    double*       __restrict__ r,
+    double*       __restrict__ r_norm_sq
+) {
+    __shared__ double s_wave[8];
+    int tid = threadIdx.x;
+    int lane = tid % 32;
+    int wave_id = tid / 32;
+
+    int idx = blockIdx.x * blockDim.x + threadIdx.x;
+    int stride = blockDim.x * gridDim.x;
+
+    double sum = 0.0;
+    for (int i = idx; i < n; i += stride) {
+        double pi = p[i];
+        double qi = q[i];
+        u[i] += alpha * pi;
+        double ri = r[i] - alpha * qi;
+        r[i] = ri;
+        sum += ri * ri;
+    }
+
+    #pragma unroll
+    for (int offset = 16; offset > 0; offset /= 2) {
+        sum += __shfl_down(sum, offset, 32);
+    }
+
+    if (lane == 0) {
+        s_wave[wave_id] = sum;
+    }
+    __syncthreads();
+
+    if (wave_id == 0) {
+        double w_sum = (lane < 8) ? s_wave[lane] : 0.0;
+        #pragma unroll
+        for (int offset = 4; offset > 0; offset /= 2) {
+            w_sum += __shfl_down(w_sum, offset, 32);
+        }
+        if (lane == 0) {
+            atomicAdd(r_norm_sq, w_sum);
+        }
+    }
+}
+
+// Device-Scalar Direction Update Kernel: p = z + beta * p
+// Reads d_rho and d_rho_prev directly on device, eliminates host-device roundtrip latency
+__launch_bounds__(256, 4)
+__global__ void vec_update_p_device_kernel(
+    int n,
+    const double* __restrict__ z,
+    double*       __restrict__ p,
+    const double* __restrict__ d_rho,
+    const double* __restrict__ d_rho_prev,
+    int iter
+) {
+    __shared__ double s_beta;
+    if (threadIdx.x == 0) {
+        if (iter == 0) {
+            s_beta = 0.0;
+        } else {
+            double rho_prev = *d_rho_prev;
+            s_beta = (fabs(rho_prev) > 1e-30) ? (*d_rho / rho_prev) : 0.0;
+        }
+    }
+    __syncthreads();
+
+    double beta = s_beta;
+    int idx = blockIdx.x * blockDim.x + threadIdx.x;
+    int stride = blockDim.x * gridDim.x;
+
+    if (iter == 0) {
+        for (int i = idx; i < n; i += stride) {
+            p[i] = z[i];
+        }
+    } else {
+        for (int i = idx; i < n; i += stride) {
+            p[i] = z[i] + beta * p[i];
+        }
+    }
+}
+
+// Device-Scalar PCG Solution/Residual Update & Norm Reduction Kernel
+// Reads d_rho and d_gamma directly on device, computes alpha = rho / gamma in registers
+// Updates u += alpha * p, r -= alpha * q, reduces ||r||^2 to d_r_sq, and saves *d_rho_prev = *d_rho
+__launch_bounds__(256, 4)
+__global__ void vec_pcg_update_device_kernel(
+    int n,
+    const double* __restrict__ p,
+    const double* __restrict__ q,
+    double*       __restrict__ u,
+    double*       __restrict__ r,
+    const double* __restrict__ d_rho,
+    const double* __restrict__ d_gamma,
+    double*       __restrict__ d_r_sq,
+    double*       __restrict__ d_rho_prev,
+    float*        __restrict__ d_r_f32 = nullptr
+) {
+    __shared__ double s_alpha;
+    __shared__ double s_wave[8];
+
+    int tid = threadIdx.x;
+    int lane = tid % 32;
+    int wave_id = tid / 32;
+
+    if (tid == 0) {
+        double gamma = *d_gamma;
+        s_alpha = (fabs(gamma) > 1e-30) ? (*d_rho / gamma) : 0.0;
+        if (d_rho_prev != nullptr && blockIdx.x == 0) {
+            *d_rho_prev = *d_rho;
+        }
+    }
+    __syncthreads();
+
+    double alpha = s_alpha;
+    int idx = blockIdx.x * blockDim.x + threadIdx.x;
+    int stride = blockDim.x * gridDim.x;
+
+    double sum = 0.0;
+    for (int i = idx; i < n; i += stride) {
+        double pi = p[i];
+        double qi = q[i];
+        double ui = u[i] + alpha * pi;
+        double ri = r[i] - alpha * qi;
+        u[i] = ui;
+        r[i] = ri;
+        if (d_r_f32 != nullptr) {
+            d_r_f32[i] = (float)ri;
+        }
+        sum += ri * ri;
+    }
+
+    #pragma unroll
+    for (int offset = 16; offset > 0; offset /= 2) {
+        sum += __shfl_down(sum, offset, 32);
+    }
+
+    if (lane == 0) {
+        s_wave[wave_id] = sum;
+    }
+    __syncthreads();
+
+    if (wave_id == 0) {
+        double w_sum = (lane < 8) ? s_wave[lane] : 0.0;
+        #pragma unroll
+        for (int offset = 4; offset > 0; offset /= 2) {
+            w_sum += __shfl_down(w_sum, offset, 32);
+        }
+        if (lane == 0) {
+            atomicAdd(d_r_sq, w_sum);
+        }
+    }
+}
+
+// Fused SpMV and Inner Product: q = A * p and gamma = p^T q in ONE kernel
+__launch_bounds__(256, 4)
+__global__ void spmv_csr_dot_kernel(
+    int num_rows,
+    const int*    __restrict__ row_ptr,
+    const int*    __restrict__ col_idx,
+    const double* __restrict__ values,
+    const double* __restrict__ x,
+    double*       __restrict__ y,
+    double*       __restrict__ d_dot
+) {
+    __shared__ double s_wave[8];
+    int tid = blockIdx.x * blockDim.x + threadIdx.x;
+    int subwarp_id = tid >> 2;
+    int lane = tid & 3;
+    int wave_id = threadIdx.x / 32;
+    int wave_lane = threadIdx.x % 32;
+    int total_subwarps = (blockDim.x * gridDim.x) >> 2;
+
+    double dot_thread = 0.0;
+
+    for (int r = subwarp_id; r < num_rows; r += total_subwarps) {
+        int start = row_ptr[r];
+        int end   = row_ptr[r + 1];
+        double sum = 0.0;
+        for (int j = start + lane; j < end; j += 4) {
+            sum += values[j] * x[col_idx[j]];
+        }
+        sum += __shfl_down(sum, 2, 32);
+        sum += __shfl_down(sum, 1, 32);
+
+        if (lane == 0) {
+            y[r] = sum;
+            dot_thread += x[r] * sum;
+        }
+    }
+
+    #pragma unroll
+    for (int offset = 16; offset > 0; offset /= 2) {
+        dot_thread += __shfl_down(dot_thread, offset, 32);
+    }
+
+    if (wave_lane == 0) {
+        s_wave[wave_id] = dot_thread;
+    }
+    __syncthreads();
+
+    if (wave_id == 0) {
+        double w_sum = (wave_lane < 8) ? s_wave[wave_lane] : 0.0;
+        #pragma unroll
+        for (int offset = 4; offset > 0; offset /= 2) {
+            w_sum += __shfl_down(w_sum, offset, 32);
+        }
+        if (wave_lane == 0 && d_dot != nullptr) {
+            atomicAdd(d_dot, w_sum);
+        }
+    }
+}
+
+// ============================================================================
+// BSR 6x6 (Block Compressed Sparse Row) GPU Kernels
+// Optimized for RDNA 3 / Wave32 execution:
+// - Eliminates 97.2% of column index memory traffic
+// - Vectorized loads with shared-read nodal vector x
+// ============================================================================
+
+__launch_bounds__(256, 4)
+__global__ void spmv_bsr6x6_fp32_kernel(
+    int num_nodes,
+    const int*   __restrict__ b_row_ptr,
+    const int*   __restrict__ b_col_idx,
+    const float* __restrict__ b_values, // [nnz_blocks * 36]
+    const float* __restrict__ x,        // [num_nodes * 6]
+    float*       __restrict__ y,        // [num_nodes * 6]
+    float alpha,
+    float beta
+) {
+    int total_dofs = num_nodes * 6;
+    int idx = blockIdx.x * blockDim.x + threadIdx.x;
+    int stride = blockDim.x * gridDim.x;
+
+    for (int r = idx; r < total_dofs; r += stride) {
+        int br = r / 6;
+        int k  = r % 6; // intra-block row index: 0..5
+
+        int b_start = b_row_ptr[br];
+        int b_end   = b_row_ptr[br + 1];
+        float sum = 0.0f;
+
+        for (int b = b_start; b < b_end; ++b) {
+            int bc = b_col_idx[b];
+            int v_idx = b * 36 + k * 6;
+            int x_idx = bc * 6;
+
+            sum += b_values[v_idx + 0] * x[x_idx + 0]
+                 + b_values[v_idx + 1] * x[x_idx + 1]
+                 + b_values[v_idx + 2] * x[x_idx + 2]
+                 + b_values[v_idx + 3] * x[x_idx + 3]
+                 + b_values[v_idx + 4] * x[x_idx + 4]
+                 + b_values[v_idx + 5] * x[x_idx + 5];
+        }
+
+        if (beta == 0.0f) {
+            y[r] = alpha * sum;
+        } else {
+            y[r] = alpha * sum + beta * y[r];
+        }
+    }
+}
+
+__launch_bounds__(256, 4)
+__global__ void spmv_bsr6x6_fp64_kernel(
+    int num_nodes,
+    const int*    __restrict__ b_row_ptr,
+    const int*    __restrict__ b_col_idx,
+    const double* __restrict__ b_values, // [nnz_blocks * 36]
+    const double* __restrict__ x,        // [num_nodes * 6]
+    double*       __restrict__ y,        // [num_nodes * 6]
+    double alpha,
+    double beta
+) {
+    int total_dofs = num_nodes * 6;
+    int idx = blockIdx.x * blockDim.x + threadIdx.x;
+    int stride = blockDim.x * gridDim.x;
+
+    for (int r = idx; r < total_dofs; r += stride) {
+        int br = r / 6;
+        int k  = r % 6;
+
+        int b_start = b_row_ptr[br];
+        int b_end   = b_row_ptr[br + 1];
+        double sum = 0.0;
+
+        for (int b = b_start; b < b_end; ++b) {
+            int bc = b_col_idx[b];
+            int v_idx = b * 36 + k * 6;
+            int x_idx = bc * 6;
+
+            sum += b_values[v_idx + 0] * x[x_idx + 0]
+                 + b_values[v_idx + 1] * x[x_idx + 1]
+                 + b_values[v_idx + 2] * x[x_idx + 2]
+                 + b_values[v_idx + 3] * x[x_idx + 3]
+                 + b_values[v_idx + 4] * x[x_idx + 4]
+                 + b_values[v_idx + 5] * x[x_idx + 5];
+        }
+
+        if (beta == 0.0) {
+            y[r] = alpha * sum;
+        } else {
+            y[r] = alpha * sum + beta * y[r];
+        }
+    }
+}
+
+// Fused BSR 6x6 SpMV + Inner Product Reduction (q = A * p, gamma = p^T q)
+__launch_bounds__(256, 4)
+__global__ void spmv_bsr6x6_dot_fp32_kernel(
+    int num_nodes,
+    const int*   __restrict__ b_row_ptr,
+    const int*   __restrict__ b_col_idx,
+    const float* __restrict__ b_values,
+    const float* __restrict__ x,
+    float*       __restrict__ y,
+    double*      __restrict__ d_dot
+) {
+    __shared__ double s_wave[8];
+    int tid = threadIdx.x;
+    int lane = tid % 32;
+    int wave_id = tid / 32;
+
+    int total_dofs = num_nodes * 6;
+    int idx = blockIdx.x * blockDim.x + threadIdx.x;
+    int stride = blockDim.x * gridDim.x;
+
+    double dot_thread = 0.0;
+
+    for (int r = idx; r < total_dofs; r += stride) {
+        int br = r / 6;
+        int k  = r % 6;
+
+        int b_start = b_row_ptr[br];
+        int b_end   = b_row_ptr[br + 1];
+        float sum = 0.0f;
+
+        for (int b = b_start; b < b_end; ++b) {
+            int bc = b_col_idx[b];
+            int v_idx = b * 36 + k * 6;
+            int x_idx = bc * 6;
+
+            sum += b_values[v_idx + 0] * x[x_idx + 0]
+                 + b_values[v_idx + 1] * x[x_idx + 1]
+                 + b_values[v_idx + 2] * x[x_idx + 2]
+                 + b_values[v_idx + 3] * x[x_idx + 3]
+                 + b_values[v_idx + 4] * x[x_idx + 4]
+                 + b_values[v_idx + 5] * x[x_idx + 5];
+        }
+
+        y[r] = sum;
+        dot_thread += (double)x[r] * (double)sum;
+    }
+
+    #pragma unroll
+    for (int offset = 16; offset > 0; offset /= 2) {
+        dot_thread += __shfl_down(dot_thread, offset, 32);
+    }
+
+    if (lane == 0) {
+        s_wave[wave_id] = dot_thread;
+    }
+    __syncthreads();
+
+    if (wave_id == 0) {
+        double w_sum = (lane < 8) ? s_wave[lane] : 0.0;
+        #pragma unroll
+        for (int offset = 4; offset > 0; offset /= 2) {
+            w_sum += __shfl_down(w_sum, offset, 32);
+        }
+        if (lane == 0 && d_dot != nullptr) {
+            atomicAdd(d_dot, w_sum);
+        }
+    }
+}
+
+
+// Fused Cast and Inner Product: converts z_f32 to z_f64 AND computes rho = r_f64^T z_f64 in ONE kernel
+__launch_bounds__(256, 4)
+__global__ void cast_and_dot_fp32_to_double_kernel(
+    int n,
+    const float*  __restrict__ z_f32,
+    const double* __restrict__ r_f64,
+    double*       __restrict__ z_f64,
+    double*       __restrict__ d_rho
+) {
+    __shared__ double s_wave[8];
+    int tid = threadIdx.x;
+    int lane = tid % 32;
+    int wave_id = tid / 32;
+
+    int idx = blockIdx.x * blockDim.x + threadIdx.x;
+    int stride = blockDim.x * gridDim.x;
+
+    double sum = 0.0;
+    for (int i = idx; i < n; i += stride) {
+        double zi = (double)z_f32[i];
+        z_f64[i] = zi;
+        sum += r_f64[i] * zi;
+    }
+
+    #pragma unroll
+    for (int offset = 16; offset > 0; offset /= 2) {
+        sum += __shfl_down(sum, offset, 32);
+    }
+
+    if (lane == 0) {
+        s_wave[wave_id] = sum;
+    }
+    __syncthreads();
+
+    if (wave_id == 0) {
+        double w_sum = (lane < 8) ? s_wave[lane] : 0.0;
+        #pragma unroll
+        for (int offset = 4; offset > 0; offset /= 2) {
+            w_sum += __shfl_down(w_sum, offset, 32);
+        }
+        if (lane == 0 && d_rho != nullptr) {
+            atomicAdd(d_rho, w_sum);
+        }
+    }
+}
+
+// 8. 100% GPU Coarse Grid Triangular Cholesky Solvers (Zero PCIe Round-Trips)
+__launch_bounds__(32, 1)
+__global__ void coarse_triangular_solve_f64_kernel(
+    int m,
+    const double* __restrict__ L,
+    const double* __restrict__ b,
+    double*       __restrict__ x
+) {
+    if (threadIdx.x == 0) {
+        double y[128];
+        for (int i = 0; i < m; ++i) {
+            double s = b[i];
+            for (int j = 0; j < i; ++j) {
+                s -= L[i * m + j] * y[j];
+            }
+            y[i] = s / L[i * m + i];
+        }
+        for (int i = m - 1; i >= 0; --i) {
+            double s = y[i];
+            for (int j = i + 1; j < m; ++j) {
+                s -= L[j * m + i] * x[j];
+            }
+            x[i] = s / L[i * m + i];
+        }
+    }
+}
+
+__launch_bounds__(32, 1)
+__global__ void coarse_triangular_solve_f32_kernel(
+    int m,
+    const double* __restrict__ L,
+    const float*  __restrict__ b,
+    float*        __restrict__ x
+) {
+    if (threadIdx.x == 0) {
+        double y[128];
+        for (int i = 0; i < m; ++i) {
+            double s = (double)b[i];
+            for (int j = 0; j < i; ++j) {
+                s -= L[i * m + j] * y[j];
+            }
+            y[i] = s / L[i * m + i];
+        }
+        for (int i = m - 1; i >= 0; --i) {
+            double s = y[i];
+            for (int j = i + 1; j < m; ++j) {
+                s -= L[j * m + i] * y[j];
+            }
+            x[i] = (float)(s / L[i * m + i]);
+        }
+    }
+}
+
+__launch_bounds__(32, 1)
+__global__ void coarse_triangular_solve_f16_kernel(
+    int m,
+    const double* __restrict__ L,
+    const __half* __restrict__ b,
+    __half*       __restrict__ x
+) {
+    if (threadIdx.x == 0) {
+        double y[128];
+        for (int i = 0; i < m; ++i) {
+            double s = (double)__half2float(b[i]);
+            for (int j = 0; j < i; ++j) {
+                s -= L[i * m + j] * y[j];
+            }
+            y[i] = s / L[i * m + i];
+        }
+        for (int i = m - 1; i >= 0; --i) {
+            double s = y[i];
+            for (int j = i + 1; j < m; ++j) {
+                s -= L[j * m + i] * y[j];
+            }
+            x[i] = __float2half((float)(s / L[i * m + i]));
+        }
     }
 }
 
@@ -1114,22 +1820,48 @@ struct HipAMGSolver {
     double* d_work_in_f64 = nullptr;
     double* d_work_out_f64 = nullptr;
     std::vector<HipAMGLevelData> levels;
+    int coarse_sweeps = 4;
 
-    // Coarsest level direct solve on CPU
+    // Coarsest level direct solve on CPU/GPU
     int coarsest_size = 0;
+    double* d_coarse_L = nullptr;
     std::vector<double> h_coarse_L;
     std::vector<double> h_coarse_r;
     std::vector<double> h_coarse_x;
     std::vector<double> h_coarse_y;
+
+    // 100% Resident GPU PCG Buffers
+    double* d_pcg_u = nullptr;
+    double* d_pcg_r = nullptr;
+    double* d_pcg_p = nullptr;
+    double* d_pcg_q = nullptr;
+    double* d_pcg_z = nullptr;
+    double* d_pcg_scalar = nullptr;
+    double* d_pcg_rho = nullptr;
+    double* d_pcg_rho_prev = nullptr;
+    double* d_pcg_gamma = nullptr;
+    double* d_pcg_r_sq = nullptr;
 
     void free() {
         for (auto& lvl : levels) {
             lvl.free();
         }
         levels.clear();
+        if (d_coarse_L)            { hipFree(d_coarse_L);            d_coarse_L = nullptr; }
         if (d_fine_inv_sqrt_d_f64) { hipFree(d_fine_inv_sqrt_d_f64); d_fine_inv_sqrt_d_f64 = nullptr; }
         if (d_work_in_f64)         { hipFree(d_work_in_f64);         d_work_in_f64 = nullptr; }
         if (d_work_out_f64)        { hipFree(d_work_out_f64);        d_work_out_f64 = nullptr; }
+
+        if (d_pcg_u)               { hipFree(d_pcg_u);               d_pcg_u = nullptr; }
+        if (d_pcg_r)               { hipFree(d_pcg_r);               d_pcg_r = nullptr; }
+        if (d_pcg_p)               { hipFree(d_pcg_p);               d_pcg_p = nullptr; }
+        if (d_pcg_q)               { hipFree(d_pcg_q);               d_pcg_q = nullptr; }
+        if (d_pcg_z)               { hipFree(d_pcg_z);               d_pcg_z = nullptr; }
+        if (d_pcg_scalar)          { hipFree(d_pcg_scalar);          d_pcg_scalar = nullptr; }
+        if (d_pcg_rho)             { hipFree(d_pcg_rho);             d_pcg_rho = nullptr; }
+        if (d_pcg_rho_prev)        { hipFree(d_pcg_rho_prev);        d_pcg_rho_prev = nullptr; }
+        if (d_pcg_gamma)           { hipFree(d_pcg_gamma);           d_pcg_gamma = nullptr; }
+        if (d_pcg_r_sq)            { hipFree(d_pcg_r_sq);            d_pcg_r_sq = nullptr; }
     }
 };
 
@@ -1167,6 +1899,17 @@ WNFEA_EXPORT void* hip_amg_create(int num_levels, int fine_size, const double* h
     hipMalloc(&solver->d_fine_inv_sqrt_d_f64, fine_size * sizeof(double));
     hipMalloc(&solver->d_work_in_f64, fine_size * sizeof(double));
     hipMalloc(&solver->d_work_out_f64, fine_size * sizeof(double));
+
+    hipMalloc(&solver->d_pcg_u, fine_size * sizeof(double));
+    hipMalloc(&solver->d_pcg_r, fine_size * sizeof(double));
+    hipMalloc(&solver->d_pcg_p, fine_size * sizeof(double));
+    hipMalloc(&solver->d_pcg_q, fine_size * sizeof(double));
+    hipMalloc(&solver->d_pcg_z, fine_size * sizeof(double));
+    hipMalloc(&solver->d_pcg_scalar, sizeof(double));
+    hipMalloc(&solver->d_pcg_rho, sizeof(double));
+    hipMalloc(&solver->d_pcg_rho_prev, sizeof(double));
+    hipMalloc(&solver->d_pcg_gamma, sizeof(double));
+    hipMalloc(&solver->d_pcg_r_sq, sizeof(double));
 
     if (h_inv_sqrt_d != nullptr) {
         hipMemcpy(solver->d_fine_inv_sqrt_d_f64, h_inv_sqrt_d, fine_size * sizeof(double), hipMemcpyHostToDevice);
@@ -1327,38 +2070,43 @@ WNFEA_EXPORT int hip_amg_set_coarse_cholesky(
     solver->h_coarse_r.resize(coarse_size);
     solver->h_coarse_x.resize(coarse_size);
     solver->h_coarse_y.resize(coarse_size);
+
+    if (solver->d_coarse_L) { hipFree(solver->d_coarse_L); solver->d_coarse_L = nullptr; }
+    HIP_CHECK(hipMalloc(&solver->d_coarse_L, coarse_size * coarse_size * sizeof(double)));
+    HIP_CHECK(hipMemcpy(solver->d_coarse_L, h_L_dense, coarse_size * coarse_size * sizeof(double), hipMemcpyHostToDevice));
     return 0;
 }
 
-WNFEA_EXPORT int hip_amg_apply_vcycle_device(
-    void* handle,
+static int hip_amg_apply_pure_vcycle_device(
+    HipAMGSolver* solver,
     const double* d_r,
     double* d_z,
-    int precision_mode
+    int precision_mode,
+    double* d_rho = nullptr
 ) {
-    if (!handle || !d_r || !d_z) return -1;
-    HipAMGSolver* solver = (HipAMGSolver*)handle;
     int fine_size = solver->fine_size;
     int num_levels = solver->num_levels;
     int block_size = 256;
-    int grid_0 = std::min(std::max((fine_size + block_size - 1) / block_size, 60), 480);
+    int grid_0_1d = std::min(std::max((fine_size + block_size - 1) / block_size, 60), 480);
+    int c_sweeps = solver->coarse_sweeps;
+    if (c_sweeps <= 0) c_sweeps = 4;
 
     // MODE 0: FP64 V-Cycle
     if (precision_mode == 0) {
-        // 1. Initial equilibration: r_equil = D^{-1/2} * r -> stored in levels[0].d_b_f64
-        hipLaunchKernelGGL(vec_pointwise_mult_kernel, dim3(grid_0), dim3(block_size), 0, 0,
-                           fine_size, d_r, solver->d_fine_inv_sqrt_d_f64, solver->levels[0].d_b_f64);
+        if (d_r != nullptr && d_r != solver->levels[0].d_b_f64) {
+            HIP_CHECK(hipMemcpyAsync(solver->levels[0].d_b_f64, d_r, fine_size * sizeof(double), hipMemcpyDeviceToDevice));
+        }
 
-        // 2. Downward sweep
+        // Downward sweep
         for (int l = 0; l < num_levels - 1; ++l) {
             auto& lvl = solver->levels[l];
-            int grid_l = std::min(std::max((lvl.fine_rows + block_size - 1) / block_size, 60), 480);
-            int grid_c = std::min(std::max((lvl.coarse_rows + block_size - 1) / block_size, 60), 480);
+            int grid_l = std::min(std::max((lvl.fine_rows * 4 + block_size - 1) / block_size, 60), 1920);
+            int grid_c = std::min(std::max((lvl.coarse_rows * 4 + block_size - 1) / block_size, 60), 1920);
 
             // Pre-smooth: x_0 = 0 -> output to lvl.d_x_f64
-            hipLaunchKernelGGL(jacobi_smooth_csr_kernel, dim3(grid_l), dim3(block_size), 0, 0,
-                               lvl.fine_rows, lvl.A.d_row_ptr, lvl.A.d_col_idx, lvl.A.d_values_f64,
-                               lvl.d_inv_diag_f64, lvl.d_b_f64, (const double*)nullptr, lvl.d_x_f64, 0.67);
+            int grid_vec = std::min(std::max((lvl.fine_rows + block_size - 1) / block_size, 60), 480);
+            hipLaunchKernelGGL(vec_scale_mul_f64_kernel, dim3(grid_vec), dim3(block_size), 0, 0,
+                               lvl.fine_rows, 0.67, lvl.d_inv_diag_f64, lvl.d_b_f64, lvl.d_x_f64);
 
             // Defect: res_l = b_l - A_l * x_l
             hipLaunchKernelGGL(defect_csr_kernel, dim3(grid_l), dim3(block_size), 0, 0,
@@ -1371,18 +2119,21 @@ WNFEA_EXPORT int hip_amg_apply_vcycle_device(
                                lvl.d_res_f64, solver->levels[l + 1].d_b_f64, 1.0, 0.0);
         }
 
-        // 3. Coarsest solve
+        // Coarsest solve
         int last = num_levels - 1;
         auto& coarsest = solver->levels[last];
         int c_size = coarsest.fine_rows;
 
-        if (solver->coarsest_size == c_size && !solver->h_coarse_L.empty() && (int)solver->h_coarse_L.size() == c_size * c_size) {
+        if (solver->coarsest_size == c_size && solver->d_coarse_L != nullptr && c_size <= 128) {
+            hipLaunchKernelGGL(coarse_triangular_solve_f64_kernel, dim3(1), dim3(32), 0, 0,
+                               c_size, solver->d_coarse_L, coarsest.d_b_f64, coarsest.d_x_f64);
+        } else if (solver->coarsest_size == c_size && !solver->h_coarse_L.empty() && (int)solver->h_coarse_L.size() == c_size * c_size) {
             HIP_CHECK(hipMemcpy(solver->h_coarse_r.data(), coarsest.d_b_f64, c_size * sizeof(double), hipMemcpyDeviceToHost));
             solve_coarse_cholesky_internal(solver, solver->h_coarse_r.data(), solver->h_coarse_x.data());
             HIP_CHECK(hipMemcpy(coarsest.d_x_f64, solver->h_coarse_x.data(), c_size * sizeof(double), hipMemcpyHostToDevice));
         } else {
-            int grid_last = std::min(std::max((c_size + block_size - 1) / block_size, 60), 480);
-            for (int it = 0; it < 2; ++it) {
+            int grid_last = std::min(std::max((c_size * 4 + block_size - 1) / block_size, 60), 480);
+            for (int it = 0; it < c_sweeps; ++it) {
                 hipLaunchKernelGGL(jacobi_smooth_csr_kernel, dim3(grid_last), dim3(block_size), 0, 0,
                                    coarsest.fine_rows, coarsest.A.d_row_ptr, coarsest.A.d_col_idx, coarsest.A.d_values_f64,
                                    coarsest.d_inv_diag_f64, coarsest.d_b_f64, (it == 0 ? (const double*)nullptr : coarsest.d_x_f64),
@@ -1391,18 +2142,17 @@ WNFEA_EXPORT int hip_amg_apply_vcycle_device(
             }
         }
 
-        // 4. Upward sweep
+        // Upward sweep
         for (int l = num_levels - 2; l >= 0; --l) {
             auto& lvl = solver->levels[l];
-            int grid_l = std::min(std::max((lvl.fine_rows + block_size - 1) / block_size, 60), 480);
+            int grid_l = std::min(std::max((lvl.fine_rows * 4 + block_size - 1) / block_size, 60), 1920);
             const double* e_coarse = solver->levels[l + 1].d_x_f64;
 
-            // Prolongate + accumulate: x_l += P_l * e_coarse
-            hipLaunchKernelGGL(prolongation_add_kernel, dim3(grid_l), dim3(block_size), 0, 0,
+            int grid_p = std::min(std::max((lvl.fine_rows + block_size - 1) / block_size, 60), 480);
+            hipLaunchKernelGGL(prolongation_add_kernel, dim3(grid_p), dim3(block_size), 0, 0,
                                lvl.fine_rows, lvl.P.d_row_ptr, lvl.P.d_col_idx, lvl.P.d_values_f64,
                                e_coarse, lvl.d_x_f64);
 
-            // Post-smooth: x_temp = x_l + omega * D_l^{-1} * (b_l - A_l * x_l)
             hipLaunchKernelGGL(jacobi_smooth_csr_kernel, dim3(grid_l), dim3(block_size), 0, 0,
                                lvl.fine_rows, lvl.A.d_row_ptr, lvl.A.d_col_idx, lvl.A.d_values_f64,
                                lvl.d_inv_diag_f64, lvl.d_b_f64, lvl.d_x_f64, lvl.d_x_temp_f64, 0.67);
@@ -1410,31 +2160,33 @@ WNFEA_EXPORT int hip_amg_apply_vcycle_device(
             std::swap(lvl.d_x_f64, lvl.d_x_temp_f64);
         }
 
-        // 5. Post-equilibrate: z = D^{-1/2} * x_0
-        hipLaunchKernelGGL(vec_pointwise_mult_kernel, dim3(grid_0), dim3(block_size), 0, 0,
-                           fine_size, solver->levels[0].d_x_f64, solver->d_fine_inv_sqrt_d_f64, d_z);
-
-        HIP_CHECK(hipDeviceSynchronize());
+        if (d_z != solver->levels[0].d_x_f64) {
+            HIP_CHECK(hipMemcpyAsync(d_z, solver->levels[0].d_x_f64, fine_size * sizeof(double), hipMemcpyDeviceToDevice));
+        }
+        if (d_rho != nullptr) {
+            hipMemsetAsync(d_rho, 0, sizeof(double));
+            hipLaunchKernelGGL(vec_dot_kernel, dim3(60), dim3(block_size), 0, 0,
+                               fine_size, d_z, solver->d_pcg_r, d_rho);
+        }
         return 0;
     }
 
     // MODE 1: FP32 V-Cycle (2x memory bandwidth acceleration)
     if (precision_mode == 1) {
-        // 1. Initial equilibration: r_equil = D^{-1/2} * r -> cast to FP32 in levels[0].d_b_f32
-        hipLaunchKernelGGL(vec_pointwise_mult_kernel, dim3(grid_0), dim3(block_size), 0, 0,
-                           fine_size, d_r, solver->d_fine_inv_sqrt_d_f64, solver->levels[0].d_b_f64);
-        hipLaunchKernelGGL(cast_double_to_float_kernel, dim3(grid_0), dim3(block_size), 0, 0,
-                           fine_size, solver->levels[0].d_b_f64, solver->levels[0].d_b_f32);
+        if (d_r != nullptr) {
+            hipLaunchKernelGGL(cast_double_to_float_kernel, dim3(grid_0_1d), dim3(block_size), 0, 0,
+                               fine_size, d_r, solver->levels[0].d_b_f32);
+        }
 
-        // 2. Downward sweep
+        // Downward sweep
         for (int l = 0; l < num_levels - 1; ++l) {
             auto& lvl = solver->levels[l];
-            int grid_l = std::min(std::max((lvl.fine_rows + block_size - 1) / block_size, 60), 480);
-            int grid_c = std::min(std::max((lvl.coarse_rows + block_size - 1) / block_size, 60), 480);
+            int grid_l = std::min(std::max((lvl.fine_rows * 4 + block_size - 1) / block_size, 60), 1920);
+            int grid_c = std::min(std::max((lvl.coarse_rows * 4 + block_size - 1) / block_size, 60), 1920);
 
-            hipLaunchKernelGGL(jacobi_smooth_csr_fp32_kernel, dim3(grid_l), dim3(block_size), 0, 0,
-                               lvl.fine_rows, lvl.A.d_row_ptr, lvl.A.d_col_idx, lvl.A.d_values_f32,
-                               lvl.d_inv_diag_f32, lvl.d_b_f32, (const float*)nullptr, lvl.d_x_f32, 0.67f);
+            int grid_vec = std::min(std::max((lvl.fine_rows + block_size - 1) / block_size, 60), 480);
+            hipLaunchKernelGGL(vec_scale_mul_fp32_kernel, dim3(grid_vec), dim3(block_size), 0, 0,
+                               lvl.fine_rows, 0.67f, lvl.d_inv_diag_f32, lvl.d_b_f32, lvl.d_x_f32);
 
             hipLaunchKernelGGL(defect_csr_fp32_kernel, dim3(grid_l), dim3(block_size), 0, 0,
                                lvl.fine_rows, lvl.A.d_row_ptr, lvl.A.d_col_idx, lvl.A.d_values_f32,
@@ -1445,12 +2197,15 @@ WNFEA_EXPORT int hip_amg_apply_vcycle_device(
                                lvl.d_res_f32, solver->levels[l + 1].d_b_f32, 1.0f, 0.0f);
         }
 
-        // 3. Coarsest solve (on host in double precision for unconditional stability)
+        // Coarsest solve
         int last = num_levels - 1;
         auto& coarsest = solver->levels[last];
         int c_size = coarsest.fine_rows;
 
-        if (solver->coarsest_size == c_size && !solver->h_coarse_L.empty() && (int)solver->h_coarse_L.size() == c_size * c_size) {
+        if (solver->coarsest_size == c_size && solver->d_coarse_L != nullptr && c_size <= 128) {
+            hipLaunchKernelGGL(coarse_triangular_solve_f32_kernel, dim3(1), dim3(32), 0, 0,
+                               c_size, solver->d_coarse_L, coarsest.d_b_f32, coarsest.d_x_f32);
+        } else if (solver->coarsest_size == c_size && !solver->h_coarse_L.empty() && (int)solver->h_coarse_L.size() == c_size * c_size) {
             std::vector<float> h_r_f32(c_size);
             HIP_CHECK(hipMemcpy(h_r_f32.data(), coarsest.d_b_f32, c_size * sizeof(float), hipMemcpyDeviceToHost));
             for (int i = 0; i < c_size; ++i) solver->h_coarse_r[i] = (double)h_r_f32[i];
@@ -1459,8 +2214,8 @@ WNFEA_EXPORT int hip_amg_apply_vcycle_device(
             for (int i = 0; i < c_size; ++i) h_x_f32[i] = (float)solver->h_coarse_x[i];
             HIP_CHECK(hipMemcpy(coarsest.d_x_f32, h_x_f32.data(), c_size * sizeof(float), hipMemcpyHostToDevice));
         } else {
-            int grid_last = std::min(std::max((c_size + block_size - 1) / block_size, 60), 480);
-            for (int it = 0; it < 2; ++it) {
+            int grid_last = std::min(std::max((c_size * 4 + block_size - 1) / block_size, 60), 480);
+            for (int it = 0; it < c_sweeps; ++it) {
                 hipLaunchKernelGGL(jacobi_smooth_csr_fp32_kernel, dim3(grid_last), dim3(block_size), 0, 0,
                                    coarsest.fine_rows, coarsest.A.d_row_ptr, coarsest.A.d_col_idx, coarsest.A.d_values_f32,
                                    coarsest.d_inv_diag_f32, coarsest.d_b_f32, (it == 0 ? (const float*)nullptr : coarsest.d_x_f32),
@@ -1469,13 +2224,14 @@ WNFEA_EXPORT int hip_amg_apply_vcycle_device(
             }
         }
 
-        // 4. Upward sweep
+        // Upward sweep
         for (int l = num_levels - 2; l >= 0; --l) {
             auto& lvl = solver->levels[l];
-            int grid_l = std::min(std::max((lvl.fine_rows + block_size - 1) / block_size, 60), 480);
+            int grid_l = std::min(std::max((lvl.fine_rows * 4 + block_size - 1) / block_size, 60), 1920);
             const float* e_coarse = solver->levels[l + 1].d_x_f32;
 
-            hipLaunchKernelGGL(prolongation_add_fp32_kernel, dim3(grid_l), dim3(block_size), 0, 0,
+            int grid_p = std::min(std::max((lvl.fine_rows + block_size - 1) / block_size, 60), 480);
+            hipLaunchKernelGGL(prolongation_add_fp32_kernel, dim3(grid_p), dim3(block_size), 0, 0,
                                lvl.fine_rows, lvl.P.d_row_ptr, lvl.P.d_col_idx, lvl.P.d_values_f32,
                                e_coarse, lvl.d_x_f32);
 
@@ -1486,33 +2242,34 @@ WNFEA_EXPORT int hip_amg_apply_vcycle_device(
             std::swap(lvl.d_x_f32, lvl.d_x_temp_f32);
         }
 
-        // 5. Cast back to FP64 & post-equilibrate into d_z
-        hipLaunchKernelGGL(cast_float_to_double_kernel, dim3(grid_0), dim3(block_size), 0, 0,
-                           fine_size, solver->levels[0].d_x_f32, solver->levels[0].d_x_f64);
-        hipLaunchKernelGGL(vec_pointwise_mult_kernel, dim3(grid_0), dim3(block_size), 0, 0,
-                           fine_size, solver->levels[0].d_x_f64, solver->d_fine_inv_sqrt_d_f64, d_z);
-
-        HIP_CHECK(hipDeviceSynchronize());
+        // Fused Cast and Dot Product: converts z_f32 to z_f64 and computes rho = r^T z
+        if (d_rho != nullptr) {
+            hipMemsetAsync(d_rho, 0, sizeof(double));
+            hipLaunchKernelGGL(cast_and_dot_fp32_to_double_kernel, dim3(grid_0_1d), dim3(block_size), 0, 0,
+                               fine_size, solver->levels[0].d_x_f32, solver->d_pcg_r, d_z, d_rho);
+        } else {
+            hipLaunchKernelGGL(cast_float_to_double_kernel, dim3(grid_0_1d), dim3(block_size), 0, 0,
+                               fine_size, solver->levels[0].d_x_f32, d_z);
+        }
         return 0;
     }
 
     // MODE 2: FP16 V-Cycle (4x memory bandwidth acceleration)
     if (precision_mode == 2) {
-        // 1. Initial equilibration: r_equil = D^{-1/2} * r
-        hipLaunchKernelGGL(vec_pointwise_mult_kernel, dim3(grid_0), dim3(block_size), 0, 0,
-                           fine_size, d_r, solver->d_fine_inv_sqrt_d_f64, solver->levels[0].d_b_f64);
-        hipLaunchKernelGGL(cast_double_to_half_kernel, dim3(grid_0), dim3(block_size), 0, 0,
-                           fine_size, solver->levels[0].d_b_f64, solver->levels[0].d_b_f16);
+        if (d_r != nullptr) {
+            hipLaunchKernelGGL(cast_double_to_half_kernel, dim3(grid_0_1d), dim3(block_size), 0, 0,
+                               fine_size, d_r, solver->levels[0].d_b_f16);
+        }
 
-        // 2. Downward sweep
+        // Downward sweep
         for (int l = 0; l < num_levels - 1; ++l) {
             auto& lvl = solver->levels[l];
-            int grid_l = std::min(std::max((lvl.fine_rows + block_size - 1) / block_size, 60), 480);
-            int grid_c = std::min(std::max((lvl.coarse_rows + block_size - 1) / block_size, 60), 480);
+            int grid_l = std::min(std::max((lvl.fine_rows * 4 + block_size - 1) / block_size, 60), 1920);
+            int grid_c = std::min(std::max((lvl.coarse_rows * 4 + block_size - 1) / block_size, 60), 1920);
 
-            hipLaunchKernelGGL(jacobi_smooth_csr_fp16_kernel, dim3(grid_l), dim3(block_size), 0, 0,
-                               lvl.fine_rows, lvl.A.d_row_ptr, lvl.A.d_col_idx, lvl.A.d_values_f16,
-                               lvl.d_inv_diag_f16, lvl.d_b_f16, (const __half*)nullptr, lvl.d_x_f16, 0.67f);
+            int grid_vec = std::min(std::max((lvl.fine_rows + block_size - 1) / block_size, 60), 480);
+            hipLaunchKernelGGL(vec_scale_mul_fp16_kernel, dim3(grid_vec), dim3(block_size), 0, 0,
+                               lvl.fine_rows, 0.67f, lvl.d_inv_diag_f16, lvl.d_b_f16, lvl.d_x_f16);
 
             hipLaunchKernelGGL(defect_csr_fp16_kernel, dim3(grid_l), dim3(block_size), 0, 0,
                                lvl.fine_rows, lvl.A.d_row_ptr, lvl.A.d_col_idx, lvl.A.d_values_f16,
@@ -1523,12 +2280,15 @@ WNFEA_EXPORT int hip_amg_apply_vcycle_device(
                                lvl.d_res_f16, solver->levels[l + 1].d_b_f16);
         }
 
-        // 3. Coarsest solve (on host in double precision)
+        // Coarsest solve
         int last = num_levels - 1;
         auto& coarsest = solver->levels[last];
         int c_size = coarsest.fine_rows;
 
-        if (solver->coarsest_size == c_size && !solver->h_coarse_L.empty() && (int)solver->h_coarse_L.size() == c_size * c_size) {
+        if (solver->coarsest_size == c_size && solver->d_coarse_L != nullptr && c_size <= 128) {
+            hipLaunchKernelGGL(coarse_triangular_solve_f16_kernel, dim3(1), dim3(32), 0, 0,
+                               c_size, solver->d_coarse_L, coarsest.d_b_f16, coarsest.d_x_f16);
+        } else if (solver->coarsest_size == c_size && !solver->h_coarse_L.empty() && (int)solver->h_coarse_L.size() == c_size * c_size) {
             std::vector<__half> h_r_f16(c_size);
             HIP_CHECK(hipMemcpy(h_r_f16.data(), coarsest.d_b_f16, c_size * sizeof(__half), hipMemcpyDeviceToHost));
             for (int i = 0; i < c_size; ++i) solver->h_coarse_r[i] = (double)__half2float(h_r_f16[i]);
@@ -1537,8 +2297,8 @@ WNFEA_EXPORT int hip_amg_apply_vcycle_device(
             for (int i = 0; i < c_size; ++i) h_x_f16[i] = __float2half((float)solver->h_coarse_x[i]);
             HIP_CHECK(hipMemcpy(coarsest.d_x_f16, h_x_f16.data(), c_size * sizeof(__half), hipMemcpyHostToDevice));
         } else {
-            int grid_last = std::min(std::max((c_size + block_size - 1) / block_size, 60), 480);
-            for (int it = 0; it < 2; ++it) {
+            int grid_last = std::min(std::max((c_size * 4 + block_size - 1) / block_size, 60), 480);
+            for (int it = 0; it < c_sweeps; ++it) {
                 hipLaunchKernelGGL(jacobi_smooth_csr_fp16_kernel, dim3(grid_last), dim3(block_size), 0, 0,
                                    coarsest.fine_rows, coarsest.A.d_row_ptr, coarsest.A.d_col_idx, coarsest.A.d_values_f16,
                                    coarsest.d_inv_diag_f16, coarsest.d_b_f16, (it == 0 ? (const __half*)nullptr : coarsest.d_x_f16),
@@ -1547,13 +2307,14 @@ WNFEA_EXPORT int hip_amg_apply_vcycle_device(
             }
         }
 
-        // 4. Upward sweep
+        // Upward sweep
         for (int l = num_levels - 2; l >= 0; --l) {
             auto& lvl = solver->levels[l];
-            int grid_l = std::min(std::max((lvl.fine_rows + block_size - 1) / block_size, 60), 480);
+            int grid_l = std::min(std::max((lvl.fine_rows * 4 + block_size - 1) / block_size, 60), 1920);
             const __half* e_coarse = solver->levels[l + 1].d_x_f16;
 
-            hipLaunchKernelGGL(prolongation_add_fp16_kernel, dim3(grid_l), dim3(block_size), 0, 0,
+            int grid_p = std::min(std::max((lvl.fine_rows + block_size - 1) / block_size, 60), 480);
+            hipLaunchKernelGGL(prolongation_add_fp16_kernel, dim3(grid_p), dim3(block_size), 0, 0,
                                lvl.fine_rows, lvl.P.d_row_ptr, lvl.P.d_col_idx, lvl.P.d_values_f16,
                                e_coarse, lvl.d_x_f16);
 
@@ -1564,17 +2325,195 @@ WNFEA_EXPORT int hip_amg_apply_vcycle_device(
             std::swap(lvl.d_x_f16, lvl.d_x_temp_f16);
         }
 
-        // 5. Cast back to FP64 & post-equilibrate into d_z
-        hipLaunchKernelGGL(cast_half_to_double_kernel, dim3(grid_0), dim3(block_size), 0, 0,
-                           fine_size, solver->levels[0].d_x_f16, solver->levels[0].d_x_f64);
-        hipLaunchKernelGGL(vec_pointwise_mult_kernel, dim3(grid_0), dim3(block_size), 0, 0,
-                           fine_size, solver->levels[0].d_x_f64, solver->d_fine_inv_sqrt_d_f64, d_z);
-
-        HIP_CHECK(hipDeviceSynchronize());
+        // Cast back to FP64 in d_z
+        hipLaunchKernelGGL(cast_half_to_double_kernel, dim3(grid_0_1d), dim3(block_size), 0, 0,
+                           fine_size, solver->levels[0].d_x_f16, d_z);
+        if (d_rho != nullptr) {
+            hipMemsetAsync(d_rho, 0, sizeof(double));
+            hipLaunchKernelGGL(vec_dot_kernel, dim3(60), dim3(block_size), 0, 0,
+                               fine_size, d_z, solver->d_pcg_r, d_rho);
+        }
         return 0;
     }
 
     return -3; // Unknown precision mode
+}
+
+WNFEA_EXPORT void hip_amg_set_coarse_sweeps(void* handle, int sweeps) {
+    if (!handle || sweeps <= 0) return;
+    HipAMGSolver* solver = (HipAMGSolver*)handle;
+    solver->coarse_sweeps = sweeps;
+}
+
+WNFEA_EXPORT int hip_amg_apply_vcycle_device(
+    void* handle,
+    const double* d_r,
+    double* d_z,
+    int precision_mode
+) {
+    if (!handle || !d_r || !d_z) return -1;
+    HipAMGSolver* solver = (HipAMGSolver*)handle;
+    int fine_size = solver->fine_size;
+    int block_size = 256;
+    int grid_0_1d = std::min(std::max((fine_size + block_size - 1) / block_size, 60), 480);
+
+    // 1. Initial equilibration: r_equil = D^{-1/2} * r -> stored in d_pcg_r
+    hipLaunchKernelGGL(vec_pointwise_mult_kernel, dim3(grid_0_1d), dim3(block_size), 0, 0,
+                       fine_size, d_r, solver->d_fine_inv_sqrt_d_f64, solver->d_pcg_r);
+
+    // 2. Pure V-Cycle on equilibrated system
+    int err = hip_amg_apply_pure_vcycle_device(solver, solver->d_pcg_r, solver->d_pcg_z, precision_mode);
+    if (err != 0) return err;
+
+    // 3. Post-equilibrate: z = D^{-1/2} * z_equil
+    hipLaunchKernelGGL(vec_pointwise_mult_kernel, dim3(grid_0_1d), dim3(block_size), 0, 0,
+                       fine_size, solver->d_pcg_z, solver->d_fine_inv_sqrt_d_f64, d_z);
+
+    HIP_CHECK(hipDeviceSynchronize());
+    return 0;
+}
+
+static inline double gpu_dot(int n, const double* d_x, const double* d_y, double* d_scalar, int grid, int block) {
+    hipMemsetAsync(d_scalar, 0, sizeof(double));
+    hipLaunchKernelGGL(vec_dot_kernel, dim3(grid), dim3(block), 0, 0, n, d_x, d_y, d_scalar);
+    double h_val = 0.0;
+    hipMemcpy(&h_val, d_scalar, sizeof(double), hipMemcpyDeviceToHost);
+    return h_val;
+}
+
+WNFEA_EXPORT int hip_amg_solve_pcg_device(
+    void* handle,
+    const double* d_b,
+    double* d_u,
+    double rtol,
+    int max_iter,
+    int precision_mode,
+    int check_interval,
+    int* iters_out,
+    double* res_out
+) {
+    if (!handle || !d_b || !d_u) return -1;
+    HipAMGSolver* solver = (HipAMGSolver*)handle;
+    int n = solver->fine_size;
+    int block_size = 256;
+    int grid_1d = std::min(std::max((n + block_size - 1) / block_size, 60), 480);
+    int grid_v4 = std::min(std::max((n * 4 + block_size - 1) / block_size, 60), 1920);
+    int grid_dot = 60;
+    if (check_interval <= 0) check_interval = 1;
+
+    double* d_r = solver->d_pcg_r;
+    double* d_p = solver->d_pcg_p;
+    double* d_q = solver->d_pcg_q;
+    double* d_z = solver->d_pcg_z;
+    double* d_scalar = solver->d_pcg_scalar;
+    double* d_rho = solver->d_pcg_rho;
+    double* d_rho_prev = solver->d_pcg_rho_prev;
+    double* d_gamma = solver->d_pcg_gamma;
+    double* d_r_sq = solver->d_pcg_r_sq;
+
+    // 1. Initial equilibration: r_0 = \bar{b} = D^{-1/2} b
+    hipLaunchKernelGGL(vec_pointwise_mult_kernel, dim3(grid_1d), dim3(block_size), 0, 0,
+                       n, d_b, solver->d_fine_inv_sqrt_d_f64, d_r);
+
+    // Initial solution: \bar{u} = 0
+    HIP_CHECK(hipMemsetAsync(d_u, 0, n * sizeof(double)));
+
+    // Norm of \bar{b}
+    double r0_sq = gpu_dot(n, d_r, d_r, d_scalar, grid_dot, block_size);
+    double r0 = std::sqrt(r0_sq);
+
+    if (r0 <= 1e-30) {
+        if (iters_out) *iters_out = 0;
+        if (res_out) *res_out = 0.0;
+        return 0;
+    }
+
+    double tol_sq = (rtol * rtol) * r0_sq;
+    int iters = 0;
+
+    // If FP32 V-Cycle, prepare initial d_b_f32 from d_r
+    if (precision_mode == 1 && solver->levels[0].d_b_f32) {
+        hipLaunchKernelGGL(cast_double_to_float_kernel, dim3(grid_1d), dim3(block_size), 0, 0,
+                           n, d_r, solver->levels[0].d_b_f32);
+    }
+
+    for (iters = 0; iters < max_iter; ++iters) {
+        // Step 1: Preconditioner + Fused Dot Product (z = M^{-1} r, rho = r^T z)
+        // Pass d_r = nullptr on iters > 0 in FP32 because d_b_f32 is already populated by previous vec_pcg_update
+        const double* r_in = (iters == 0 || precision_mode != 1) ? d_r : nullptr;
+        int err = hip_amg_apply_pure_vcycle_device(solver, r_in, d_z, precision_mode, d_rho);
+        if (err != 0) return err;
+
+        // Step 2: Update direction: p = z + beta * p (computes beta = rho / rho_prev directly on device)
+        hipLaunchKernelGGL(vec_update_p_device_kernel, dim3(grid_1d), dim3(block_size), 0, 0,
+                           n, d_z, d_p, d_rho, d_rho_prev, iters);
+
+        // Step 3: Fused SpMV and Inner Product: q = A * p AND gamma = p^T q in ONE single kernel
+        hipMemsetAsync(d_gamma, 0, sizeof(double));
+        hipLaunchKernelGGL(spmv_csr_dot_kernel, dim3(grid_v4), dim3(block_size), 0, 0,
+                           n, solver->levels[0].A.d_row_ptr, solver->levels[0].A.d_col_idx,
+                           solver->levels[0].A.d_values_f64, d_p, d_q, d_gamma);
+
+        // Step 4: Fused Vector Update: u += alpha*p, r -= alpha*q, ||r||^2, *d_rho_prev = *d_rho,
+        // and directly write d_b_f32 = (float)r (zero-overhead stream store for next V-cycle!)
+        hipMemsetAsync(d_r_sq, 0, sizeof(double));
+        float* d_b_f32_next = (precision_mode == 1) ? solver->levels[0].d_b_f32 : nullptr;
+        hipLaunchKernelGGL(vec_pcg_update_device_kernel, dim3(grid_1d), dim3(block_size), 0, 0,
+                           n, d_p, d_q, d_u, d_r, d_rho, d_gamma, d_r_sq, d_rho_prev, d_b_f32_next);
+
+        // Step 5: Periodic host-device sync for convergence check
+        if ((iters + 1) % check_interval == 0 || iters == max_iter - 1) {
+            double r_sq = 0.0;
+            HIP_CHECK(hipMemcpy(&r_sq, d_r_sq, sizeof(double), hipMemcpyDeviceToHost));
+
+            if (r_sq <= tol_sq) {
+                iters++;
+                if (res_out) *res_out = std::sqrt(r_sq) / r0;
+                break;
+            }
+        }
+    }
+
+    if (iters_out) *iters_out = iters;
+    if (res_out && iters >= max_iter) {
+        double r_sq = gpu_dot(n, d_r, d_r, d_scalar, grid_dot, block_size);
+        *res_out = std::sqrt(r_sq) / r0;
+    }
+
+    // Post-equilibrate solution: u = D^{-1/2} * \bar{u}
+    hipLaunchKernelGGL(vec_pointwise_mult_kernel, dim3(grid_1d), dim3(block_size), 0, 0,
+                       n, d_u, solver->d_fine_inv_sqrt_d_f64, d_u);
+
+    HIP_CHECK(hipDeviceSynchronize());
+    return 0;
+}
+
+WNFEA_EXPORT int hip_amg_solve_pcg(
+    void* handle,
+    const double* h_b,
+    double* h_u,
+    double rtol,
+    int max_iter,
+    int precision_mode,
+    int check_interval,
+    int* iters_out,
+    double* res_out
+) {
+    if (!handle || !h_b || !h_u) return -1;
+    HipAMGSolver* solver = (HipAMGSolver*)handle;
+    int fine_size = solver->fine_size;
+
+    // Copy RHS to GPU work buffer
+    HIP_CHECK(hipMemcpy(solver->d_work_in_f64, h_b, fine_size * sizeof(double), hipMemcpyHostToDevice));
+
+    // Execute 100% GPU resident PCG solve
+    int err = hip_amg_solve_pcg_device(handle, solver->d_work_in_f64, solver->d_pcg_u,
+                                       rtol, max_iter, precision_mode, check_interval, iters_out, res_out);
+    if (err != 0) return err;
+
+    // Copy final converged solution back to host
+    HIP_CHECK(hipMemcpy(h_u, solver->d_pcg_u, fine_size * sizeof(double), hipMemcpyDeviceToHost));
+    return 0;
 }
 
 WNFEA_EXPORT int hip_amg_apply_vcycle(
@@ -1604,6 +2543,624 @@ WNFEA_EXPORT void hip_amg_destroy(void* handle) {
     HipAMGSolver* solver = (HipAMGSolver*)handle;
     solver->free();
     delete solver;
+}
+
+// ============================================================================
+// Native GPU Sparse Matrix Assembly for 3D Beam Elements
+// ============================================================================
+
+__device__ inline void mult_Rt_M_R(const double R[3][3], const double M[3][3], double out[3][3]) {
+    double temp[3][3];
+    #pragma unroll
+    for (int i = 0; i < 3; ++i) {
+        #pragma unroll
+        for (int j = 0; j < 3; ++j) {
+            temp[i][j] = R[0][i] * M[0][j] + R[1][i] * M[1][j] + R[2][i] * M[2][j];
+        }
+    }
+    #pragma unroll
+    for (int i = 0; i < 3; ++i) {
+        #pragma unroll
+        for (int j = 0; j < 3; ++j) {
+            out[i][j] = temp[i][0] * R[0][j] + temp[i][1] * R[1][j] + temp[i][2] * R[2][j];
+        }
+    }
+}
+
+__launch_bounds__(256, 2)
+__global__ void beam3d_assemble_stiffness_csr_kernel(
+    int num_elements,
+    const double* __restrict__ nodes,
+    const int*    __restrict__ elements,
+    const double* __restrict__ props,
+    const int*    __restrict__ csr_row_ptr,
+    const int*    __restrict__ csr_col_idx,
+    double*       __restrict__ csr_values,
+    double*       __restrict__ out_elem_vals,
+    int direct_scatter
+) {
+    int tid = blockIdx.x * blockDim.x + threadIdx.x;
+    int stride = blockDim.x * gridDim.x;
+
+    for (int e = tid; e < num_elements; e += stride) {
+        int n1 = elements[e * 2];
+        int n2 = elements[e * 2 + 1];
+
+        double x1 = nodes[n1 * 3], y1 = nodes[n1 * 3 + 1], z1 = nodes[n1 * 3 + 2];
+        double x2 = nodes[n2 * 3], y2 = nodes[n2 * 3 + 1], z2 = nodes[n2 * 3 + 2];
+
+        double dx = x2 - x1;
+        double dy = y2 - y1;
+        double dz = z2 - z1;
+        double L = sqrt(dx * dx + dy * dy + dz * dz);
+        if (L < 1e-12) continue;
+
+        double E  = props[e * 6 + 0];
+        double G  = props[e * 6 + 1];
+        double A  = props[e * 6 + 2];
+        double Iy = props[e * 6 + 3];
+        double Iz = props[e * 6 + 4];
+        double J  = props[e * 6 + 5];
+
+        double lx[3] = { dx / L, dy / L, dz / L };
+        double ly[3] = { 0.0, 0.0, 0.0 };
+        double lz[3] = { 0.0, 0.0, 0.0 };
+
+        if (fabs(fabs(dx) - L) < 1e-9) {
+            lx[0] = (dx > 0) ? 1.0 : -1.0; lx[1] = 0.0; lx[2] = 0.0;
+            ly[0] = 0.0; ly[1] = 1.0; ly[2] = 0.0;
+            lz[0] = 0.0; lz[1] = 0.0; lz[2] = 1.0;
+        } else if (fabs(fabs(dy) - L) < 1e-9) {
+            lx[0] = 0.0; lx[1] = (dy > 0) ? 1.0 : -1.0; lx[2] = 0.0;
+            ly[0] = 1.0; ly[1] = 0.0; ly[2] = 0.0;
+            lz[0] = 0.0; lz[1] = 0.0; lz[2] = 1.0;
+        } else if (fabs(fabs(dz) - L) < 1e-9) {
+            lx[0] = 0.0; lx[1] = 0.0; lx[2] = (dz > 0) ? 1.0 : -1.0;
+            ly[0] = 1.0; ly[1] = 0.0; ly[2] = 0.0;
+            lz[0] = 0.0; lz[1] = 1.0; lz[2] = 0.0;
+        } else {
+            ly[0] = -lx[1];
+            ly[1] = lx[0];
+            ly[2] = 0.0;
+            double n_ly = sqrt(ly[0] * ly[0] + ly[1] * ly[1] + ly[2] * ly[2]);
+            if (n_ly < 1e-9) {
+                ly[0] = lx[2];
+                ly[1] = 0.0;
+                ly[2] = -lx[0];
+                n_ly = sqrt(ly[0] * ly[0] + ly[1] * ly[1] + ly[2] * ly[2]);
+            }
+            double inv_nly = 1.0 / n_ly;
+            ly[0] *= inv_nly; ly[1] *= inv_nly; ly[2] *= inv_nly;
+
+            lz[0] = lx[1] * ly[2] - lx[2] * ly[1];
+            lz[1] = lx[2] * ly[0] - lx[0] * ly[2];
+            lz[2] = lx[0] * ly[1] - lx[1] * ly[0];
+            double n_lz = sqrt(lz[0] * lz[0] + lz[1] * lz[1] + lz[2] * lz[2]);
+            if (n_lz > 1e-12) {
+                double inv_nlz = 1.0 / n_lz;
+                lz[0] *= inv_nlz; lz[1] *= inv_nlz; lz[2] *= inv_nlz;
+            }
+        }
+
+        double R[3][3] = {
+            { lx[0], lx[1], lx[2] },
+            { ly[0], ly[1], ly[2] },
+            { lz[0], lz[1], lz[2] }
+        };
+
+        double inv_L = 1.0 / L;
+        double inv_L2 = inv_L * inv_L;
+        double inv_L3 = inv_L2 * inv_L;
+
+        double ax  = E * A * inv_L;
+        double tor = G * J * inv_L;
+        double bz1 = 12.0 * E * Iz * inv_L3;
+        double bz2 =  6.0 * E * Iz * inv_L2;
+        double bz3 =  4.0 * E * Iz * inv_L;
+        double bz4 =  2.0 * E * Iz * inv_L;
+
+        double by1 = 12.0 * E * Iy * inv_L3;
+        double by2 =  6.0 * E * Iy * inv_L2;
+        double by3 =  4.0 * E * Iy * inv_L;
+        double by4 =  2.0 * E * Iy * inv_L;
+
+        double M00[3][3] = { { ax, 0.0, 0.0 }, { 0.0, bz1, 0.0 }, { 0.0, 0.0, by1 } };
+        double M01[3][3] = { { 0.0, 0.0, 0.0 }, { 0.0, 0.0, bz2 }, { 0.0, -by2, 0.0 } };
+        double M02[3][3] = { { -ax, 0.0, 0.0 }, { 0.0, -bz1, 0.0 }, { 0.0, 0.0, -by1 } };
+        double M03[3][3] = { { 0.0, 0.0, 0.0 }, { 0.0, 0.0, bz2 }, { 0.0, -by2, 0.0 } };
+
+        double M11[3][3] = { { tor, 0.0, 0.0 }, { 0.0, by3, 0.0 }, { 0.0, 0.0, bz3 } };
+        double M12[3][3] = { { 0.0, 0.0, 0.0 }, { 0.0, 0.0, by2 }, { 0.0, -bz2, 0.0 } };
+        double M13[3][3] = { { -tor, 0.0, 0.0 }, { 0.0, by4, 0.0 }, { 0.0, 0.0, bz4 } };
+
+        double M22[3][3] = { { ax, 0.0, 0.0 }, { 0.0, bz1, 0.0 }, { 0.0, 0.0, by1 } };
+        double M23[3][3] = { { 0.0, 0.0, 0.0 }, { 0.0, 0.0, -bz2 }, { 0.0, by2, 0.0 } };
+        double M33[3][3] = { { tor, 0.0, 0.0 }, { 0.0, by3, 0.0 }, { 0.0, 0.0, bz3 } };
+
+        double Kg[12][12];
+        double B00[3][3], B01[3][3], B02[3][3], B03[3][3];
+        double B11[3][3], B12[3][3], B13[3][3];
+        double B22[3][3], B23[3][3], B33[3][3];
+
+        mult_Rt_M_R(R, M00, B00);
+        mult_Rt_M_R(R, M01, B01);
+        mult_Rt_M_R(R, M02, B02);
+        mult_Rt_M_R(R, M03, B03);
+
+        mult_Rt_M_R(R, M11, B11);
+        mult_Rt_M_R(R, M12, B12);
+        mult_Rt_M_R(R, M13, B13);
+
+        mult_Rt_M_R(R, M22, B22);
+        mult_Rt_M_R(R, M23, B23);
+        mult_Rt_M_R(R, M33, B33);
+
+        #pragma unroll
+        for (int r = 0; r < 3; ++r) {
+            #pragma unroll
+            for (int c = 0; c < 3; ++c) {
+                Kg[r + 0][c + 0] = B00[r][c];
+                Kg[r + 0][c + 3] = B01[r][c];
+                Kg[r + 0][c + 6] = B02[r][c];
+                Kg[r + 0][c + 9] = B03[r][c];
+
+                Kg[r + 3][c + 0] = B01[c][r];
+                Kg[r + 3][c + 3] = B11[r][c];
+                Kg[r + 3][c + 6] = B12[r][c];
+                Kg[r + 3][c + 9] = B13[r][c];
+
+                Kg[r + 6][c + 0] = B02[c][r];
+                Kg[r + 6][c + 3] = B12[c][r];
+                Kg[r + 6][c + 6] = B22[r][c];
+                Kg[r + 6][c + 9] = B23[r][c];
+
+                Kg[r + 9][c + 0] = B03[c][r];
+                Kg[r + 9][c + 3] = B13[c][r];
+                Kg[r + 9][c + 6] = B23[c][r];
+                Kg[r + 9][c + 9] = B33[r][c];
+            }
+        }
+
+        if (out_elem_vals != nullptr) {
+            #pragma unroll
+            for (int r = 0; r < 12; ++r) {
+                #pragma unroll
+                for (int c = 0; c < 12; ++c) {
+                    out_elem_vals[e * 144 + r * 12 + c] = Kg[r][c];
+                }
+            }
+        }
+
+        if (direct_scatter && csr_row_ptr != nullptr && csr_col_idx != nullptr && csr_values != nullptr) {
+            int elem_dofs[12];
+            #pragma unroll
+            for (int d = 0; d < 6; ++d) {
+                elem_dofs[d]     = n1 * 6 + d;
+                elem_dofs[6 + d] = n2 * 6 + d;
+            }
+
+            for (int r = 0; r < 12; ++r) {
+                int row = elem_dofs[r];
+                int row_start = csr_row_ptr[row];
+                int row_end   = csr_row_ptr[row + 1];
+
+                for (int c = 0; c < 12; ++c) {
+                    int col = elem_dofs[c];
+                    double val = Kg[r][c];
+                    if (fabs(val) < 1e-30) continue;
+
+                    int low = row_start;
+                    int high = row_end - 1;
+                    while (low <= high) {
+                        int mid = (low + high) >> 1;
+                        int mid_col = csr_col_idx[mid];
+                        if (mid_col == col) {
+                            atomicAddDouble(&csr_values[mid], val);
+                            break;
+                        } else if (mid_col < col) {
+                            low = mid + 1;
+                        } else {
+                            high = mid - 1;
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+__global__ void apply_dirichlet_bc_rows_kernel(
+    int num_fixed,
+    const int* __restrict__ fixed_dofs,
+    const int* __restrict__ csr_row_ptr,
+    const int* __restrict__ csr_col_idx,
+    double*    __restrict__ csr_values,
+    double*    __restrict__ F
+) {
+    int tid = blockIdx.x * blockDim.x + threadIdx.x;
+    int stride = blockDim.x * gridDim.x;
+
+    for (int i = tid; i < num_fixed; i += stride) {
+        int dof = fixed_dofs[i];
+        if (F != nullptr) {
+            F[dof] = 0.0;
+        }
+        int start = csr_row_ptr[dof];
+        int end   = csr_row_ptr[dof + 1];
+        for (int k = start; k < end; ++k) {
+            if (csr_col_idx[k] == dof) {
+                csr_values[k] = 1.0;
+            } else {
+                csr_values[k] = 0.0;
+            }
+        }
+    }
+}
+
+__global__ void apply_dirichlet_bc_cols_kernel(
+    int n_dofs,
+    const unsigned char* __restrict__ is_fixed_mask,
+    const int* __restrict__ csr_row_ptr,
+    const int* __restrict__ csr_col_idx,
+    double*    __restrict__ csr_values
+) {
+    int r = blockIdx.x * blockDim.x + threadIdx.x;
+    if (r >= n_dofs) return;
+
+    if (is_fixed_mask[r]) return; // Handled by row kernel
+
+    int start = csr_row_ptr[r];
+    int end   = csr_row_ptr[r + 1];
+    for (int k = start; k < end; ++k) {
+        int col = csr_col_idx[k];
+        if (is_fixed_mask[col]) {
+            csr_values[k] = 0.0;
+        }
+    }
+}
+
+WNFEA_EXPORT int hip_assemble_beam_system_csr_device(
+    int num_nodes,
+    int num_elements,
+    const double* d_nodes,
+    const int* d_elements,
+    const double* d_props,
+    int nnz,
+    const int* d_csr_row_ptr,
+    const int* d_csr_col_idx,
+    double* d_csr_values,
+    int num_fixed,
+    const int* d_fixed_dofs,
+    const unsigned char* d_is_fixed_mask,
+    double* d_F,
+    double* d_out_elem_vals,
+    int direct_scatter
+) {
+    if (num_elements <= 0) return 0;
+    int block_size = 256;
+    int grid_size = std::min(std::max((num_elements + block_size - 1) / block_size, 60), 1920);
+
+    if (direct_scatter && d_csr_values != nullptr) {
+        HIP_CHECK(hipMemsetAsync(d_csr_values, 0, nnz * sizeof(double)));
+    }
+
+    hipLaunchKernelGGL(beam3d_assemble_stiffness_csr_kernel, dim3(grid_size), dim3(block_size), 0, 0,
+                       num_elements, d_nodes, d_elements, d_props,
+                       d_csr_row_ptr, d_csr_col_idx, d_csr_values, d_out_elem_vals, direct_scatter);
+
+    if (direct_scatter && num_fixed > 0 && d_fixed_dofs != nullptr && d_is_fixed_mask != nullptr) {
+        int grid_fixed = std::min(std::max((num_fixed + block_size - 1) / block_size, 1), 480);
+        hipLaunchKernelGGL(apply_dirichlet_bc_rows_kernel, dim3(grid_fixed), dim3(block_size), 0, 0,
+                           num_fixed, d_fixed_dofs, d_csr_row_ptr, d_csr_col_idx, d_csr_values, d_F);
+
+        int n_dofs = num_nodes * 6;
+        int grid_cols = std::min(std::max((n_dofs + block_size - 1) / block_size, 60), 1920);
+        hipLaunchKernelGGL(apply_dirichlet_bc_cols_kernel, dim3(grid_cols), dim3(block_size), 0, 0,
+                           n_dofs, d_is_fixed_mask, d_csr_row_ptr, d_csr_col_idx, d_csr_values);
+    }
+
+    HIP_CHECK(hipDeviceSynchronize());
+    return 0;
+}
+
+WNFEA_EXPORT int hip_assemble_beam_system_csr(
+    int num_nodes,
+    int num_elements,
+    const double* h_nodes,
+    const int* h_elements,
+    const double* h_props,
+    int nnz,
+    const int* h_csr_row_ptr,
+    const int* h_csr_col_idx,
+    double* h_csr_values,
+    int num_fixed,
+    const int* h_fixed_dofs,
+    double* h_F,
+    double* h_out_elem_vals,
+    int direct_scatter
+) {
+    if (num_elements <= 0) return 0;
+    int n_dofs = num_nodes * 6;
+
+    double* d_nodes = nullptr;
+    int* d_elements = nullptr;
+    double* d_props = nullptr;
+    int* d_csr_row_ptr = nullptr;
+    int* d_csr_col_idx = nullptr;
+    double* d_csr_values = nullptr;
+    int* d_fixed_dofs = nullptr;
+    unsigned char* d_is_fixed_mask = nullptr;
+    double* d_F = nullptr;
+    double* d_out_elem_vals = nullptr;
+
+    HIP_CHECK(hipMalloc(&d_nodes, num_nodes * 3 * sizeof(double)));
+    HIP_CHECK(hipMemcpy(d_nodes, h_nodes, num_nodes * 3 * sizeof(double), hipMemcpyHostToDevice));
+
+    HIP_CHECK(hipMalloc(&d_elements, num_elements * 2 * sizeof(int)));
+    HIP_CHECK(hipMemcpy(d_elements, h_elements, num_elements * 2 * sizeof(int), hipMemcpyHostToDevice));
+
+    HIP_CHECK(hipMalloc(&d_props, num_elements * 6 * sizeof(double)));
+    HIP_CHECK(hipMemcpy(d_props, h_props, num_elements * 6 * sizeof(double), hipMemcpyHostToDevice));
+
+    if (direct_scatter && h_csr_row_ptr && h_csr_col_idx && h_csr_values) {
+        HIP_CHECK(hipMalloc(&d_csr_row_ptr, (n_dofs + 1) * sizeof(int)));
+        HIP_CHECK(hipMemcpy(d_csr_row_ptr, h_csr_row_ptr, (n_dofs + 1) * sizeof(int), hipMemcpyHostToDevice));
+
+        HIP_CHECK(hipMalloc(&d_csr_col_idx, nnz * sizeof(int)));
+        HIP_CHECK(hipMemcpy(d_csr_col_idx, h_csr_col_idx, nnz * sizeof(int), hipMemcpyHostToDevice));
+
+        HIP_CHECK(hipMalloc(&d_csr_values, nnz * sizeof(double)));
+    }
+
+    if (h_out_elem_vals != nullptr) {
+        HIP_CHECK(hipMalloc(&d_out_elem_vals, num_elements * 144 * sizeof(double)));
+    }
+
+    std::vector<unsigned char> h_mask;
+    if (direct_scatter && num_fixed > 0 && h_fixed_dofs != nullptr) {
+        HIP_CHECK(hipMalloc(&d_fixed_dofs, num_fixed * sizeof(int)));
+        HIP_CHECK(hipMemcpy(d_fixed_dofs, h_fixed_dofs, num_fixed * sizeof(int), hipMemcpyHostToDevice));
+
+        h_mask.assign(n_dofs, 0);
+        for (int i = 0; i < num_fixed; ++i) {
+            int dof = h_fixed_dofs[i];
+            if (dof >= 0 && dof < n_dofs) h_mask[dof] = 1;
+        }
+        HIP_CHECK(hipMalloc(&d_is_fixed_mask, n_dofs * sizeof(unsigned char)));
+        HIP_CHECK(hipMemcpy(d_is_fixed_mask, h_mask.data(), n_dofs * sizeof(unsigned char), hipMemcpyHostToDevice));
+
+        if (h_F != nullptr) {
+            HIP_CHECK(hipMalloc(&d_F, n_dofs * sizeof(double)));
+            HIP_CHECK(hipMemcpy(d_F, h_F, n_dofs * sizeof(double), hipMemcpyHostToDevice));
+        }
+    }
+
+    int err = hip_assemble_beam_system_csr_device(
+        num_nodes, num_elements, d_nodes, d_elements, d_props,
+        nnz, d_csr_row_ptr, d_csr_col_idx, d_csr_values,
+        num_fixed, d_fixed_dofs, d_is_fixed_mask, d_F,
+        d_out_elem_vals, direct_scatter
+    );
+
+    if (err == 0) {
+        if (direct_scatter && h_csr_values && d_csr_values) {
+            HIP_CHECK(hipMemcpy(h_csr_values, d_csr_values, nnz * sizeof(double), hipMemcpyDeviceToHost));
+        }
+        if (direct_scatter && h_F && d_F) {
+            HIP_CHECK(hipMemcpy(h_F, d_F, n_dofs * sizeof(double), hipMemcpyDeviceToHost));
+        }
+        if (h_out_elem_vals && d_out_elem_vals) {
+            HIP_CHECK(hipMemcpy(h_out_elem_vals, d_out_elem_vals, num_elements * 144 * sizeof(double), hipMemcpyDeviceToHost));
+        }
+    }
+
+    if (d_nodes) hipFree(d_nodes);
+    if (d_elements) hipFree(d_elements);
+    if (d_props) hipFree(d_props);
+    if (d_csr_row_ptr) hipFree(d_csr_row_ptr);
+    if (d_csr_col_idx) hipFree(d_csr_col_idx);
+    if (d_csr_values) hipFree(d_csr_values);
+    if (d_fixed_dofs) hipFree(d_fixed_dofs);
+    if (d_is_fixed_mask) hipFree(d_is_fixed_mask);
+    if (d_F) hipFree(d_F);
+    if (d_out_elem_vals) hipFree(d_out_elem_vals);
+
+    return err;
+}
+
+// ============================================================================
+// BSR 6x6 Exported C Interfaces
+// ============================================================================
+
+WNFEA_EXPORT int hip_spmv_bsr6x6_fp32(
+    int num_nodes,
+    int nnz_blocks,
+    const int*   h_b_row_ptr,
+    const int*   h_b_col_idx,
+    const float* h_b_values,
+    const float* h_x,
+    float*       h_y,
+    float alpha,
+    float beta,
+    int block_size,
+    int grid_size
+) {
+    if (num_nodes <= 0 || nnz_blocks <= 0 || !h_b_row_ptr || !h_b_col_idx || !h_b_values || !h_x || !h_y) {
+        return -1;
+    }
+    int total_dofs = num_nodes * 6;
+    if (block_size <= 0) block_size = 256;
+    if (grid_size <= 0) {
+        int desired = (total_dofs + block_size - 1) / block_size;
+        if (desired < 60) desired = 60;
+        if (desired > 1920) desired = 1920;
+        grid_size = desired;
+    }
+
+    int *d_b_row_ptr = nullptr, *d_b_col_idx = nullptr;
+    float *d_b_values = nullptr, *d_x = nullptr, *d_y = nullptr;
+
+    HIP_CHECK(hipMalloc(&d_b_row_ptr, (num_nodes + 1) * sizeof(int)));
+    HIP_CHECK(hipMalloc(&d_b_col_idx, nnz_blocks * sizeof(int)));
+    HIP_CHECK(hipMalloc(&d_b_values,  nnz_blocks * 36 * sizeof(float)));
+    HIP_CHECK(hipMalloc(&d_x,         total_dofs * sizeof(float)));
+    HIP_CHECK(hipMalloc(&d_y,         total_dofs * sizeof(float)));
+
+    HIP_CHECK(hipMemcpy(d_b_row_ptr, h_b_row_ptr, (num_nodes + 1) * sizeof(int), hipMemcpyHostToDevice));
+    HIP_CHECK(hipMemcpy(d_b_col_idx, h_b_col_idx, nnz_blocks * sizeof(int), hipMemcpyHostToDevice));
+    HIP_CHECK(hipMemcpy(d_b_values,  h_b_values,  nnz_blocks * 36 * sizeof(float), hipMemcpyHostToDevice));
+    HIP_CHECK(hipMemcpy(d_x,         h_x,         total_dofs * sizeof(float), hipMemcpyHostToDevice));
+    if (beta != 0.0f) {
+        HIP_CHECK(hipMemcpy(d_y, h_y, total_dofs * sizeof(float), hipMemcpyHostToDevice));
+    }
+
+    hipLaunchKernelGGL(spmv_bsr6x6_fp32_kernel, dim3(grid_size), dim3(block_size), 0, 0,
+                       num_nodes, d_b_row_ptr, d_b_col_idx, d_b_values, d_x, d_y, alpha, beta);
+    HIP_CHECK(hipDeviceSynchronize());
+
+    HIP_CHECK(hipMemcpy(h_y, d_y, total_dofs * sizeof(float), hipMemcpyDeviceToHost));
+
+    hipFree(d_b_row_ptr);
+    hipFree(d_b_col_idx);
+    hipFree(d_b_values);
+    hipFree(d_x);
+    hipFree(d_y);
+
+    return 0;
+}
+
+WNFEA_EXPORT int hip_spmv_bsr6x6_fp64(
+    int num_nodes,
+    int nnz_blocks,
+    const int*    h_b_row_ptr,
+    const int*    h_b_col_idx,
+    const double* h_b_values,
+    const double* h_x,
+    double*       h_y,
+    double alpha,
+    double beta,
+    int block_size,
+    int grid_size
+) {
+    if (num_nodes <= 0 || nnz_blocks <= 0 || !h_b_row_ptr || !h_b_col_idx || !h_b_values || !h_x || !h_y) {
+        return -1;
+    }
+    int total_dofs = num_nodes * 6;
+    if (block_size <= 0) block_size = 256;
+    if (grid_size <= 0) {
+        int desired = (total_dofs + block_size - 1) / block_size;
+        if (desired < 60) desired = 60;
+        if (desired > 1920) desired = 1920;
+        grid_size = desired;
+    }
+
+    int *d_b_row_ptr = nullptr, *d_b_col_idx = nullptr;
+    double *d_b_values = nullptr, *d_x = nullptr, *d_y = nullptr;
+
+    HIP_CHECK(hipMalloc(&d_b_row_ptr, (num_nodes + 1) * sizeof(int)));
+    HIP_CHECK(hipMalloc(&d_b_col_idx, nnz_blocks * sizeof(int)));
+    HIP_CHECK(hipMalloc(&d_b_values,  nnz_blocks * 36 * sizeof(double)));
+    HIP_CHECK(hipMalloc(&d_x,         total_dofs * sizeof(double)));
+    HIP_CHECK(hipMalloc(&d_y,         total_dofs * sizeof(double)));
+
+    HIP_CHECK(hipMemcpy(d_b_row_ptr, h_b_row_ptr, (num_nodes + 1) * sizeof(int), hipMemcpyHostToDevice));
+    HIP_CHECK(hipMemcpy(d_b_col_idx, h_b_col_idx, nnz_blocks * sizeof(int), hipMemcpyHostToDevice));
+    HIP_CHECK(hipMemcpy(d_b_values,  h_b_values,  nnz_blocks * 36 * sizeof(double), hipMemcpyHostToDevice));
+    HIP_CHECK(hipMemcpy(d_x,         h_x,         total_dofs * sizeof(double), hipMemcpyHostToDevice));
+    if (beta != 0.0) {
+        HIP_CHECK(hipMemcpy(d_y, h_y, total_dofs * sizeof(double), hipMemcpyHostToDevice));
+    }
+
+    hipLaunchKernelGGL(spmv_bsr6x6_fp64_kernel, dim3(grid_size), dim3(block_size), 0, 0,
+                       num_nodes, d_b_row_ptr, d_b_col_idx, d_b_values, d_x, d_y, alpha, beta);
+    HIP_CHECK(hipDeviceSynchronize());
+
+    HIP_CHECK(hipMemcpy(h_y, d_y, total_dofs * sizeof(double), hipMemcpyDeviceToHost));
+
+    hipFree(d_b_row_ptr);
+    hipFree(d_b_col_idx);
+    hipFree(d_b_values);
+    hipFree(d_x);
+    hipFree(d_y);
+
+    return 0;
+}
+
+WNFEA_EXPORT int hip_spmv_bsr6x6_benchmark(
+    int num_nodes,
+    int nnz_blocks,
+    const int*   h_b_row_ptr,
+    const int*   h_b_col_idx,
+    const float* h_b_values,
+    int num_repeats,
+    double* out_time_ms,
+    double* out_bandwidth_gbs,
+    double* out_gflops
+) {
+    if (num_nodes <= 0 || nnz_blocks <= 0 || num_repeats <= 0) return -1;
+    int total_dofs = num_nodes * 6;
+    int block_size = 256;
+    int grid_size = std::min(std::max((total_dofs + block_size - 1) / block_size, 60), 1920);
+
+    int *d_b_row_ptr = nullptr, *d_b_col_idx = nullptr;
+    float *d_b_values = nullptr, *d_x = nullptr, *d_y = nullptr;
+
+    HIP_CHECK(hipMalloc(&d_b_row_ptr, (num_nodes + 1) * sizeof(int)));
+    HIP_CHECK(hipMalloc(&d_b_col_idx, nnz_blocks * sizeof(int)));
+    HIP_CHECK(hipMalloc(&d_b_values,  nnz_blocks * 36 * sizeof(float)));
+    HIP_CHECK(hipMalloc(&d_x,         total_dofs * sizeof(float)));
+    HIP_CHECK(hipMalloc(&d_y,         total_dofs * sizeof(float)));
+
+    HIP_CHECK(hipMemcpy(d_b_row_ptr, h_b_row_ptr, (num_nodes + 1) * sizeof(int), hipMemcpyHostToDevice));
+    HIP_CHECK(hipMemcpy(d_b_col_idx, h_b_col_idx, nnz_blocks * sizeof(int), hipMemcpyHostToDevice));
+    HIP_CHECK(hipMemcpy(d_b_values,  h_b_values,  nnz_blocks * 36 * sizeof(float), hipMemcpyHostToDevice));
+    HIP_CHECK(hipMemset(d_x, 1, total_dofs * sizeof(float)));
+    HIP_CHECK(hipMemset(d_y, 0, total_dofs * sizeof(float)));
+
+    // Warmup
+    hipLaunchKernelGGL(spmv_bsr6x6_fp32_kernel, dim3(grid_size), dim3(block_size), 0, 0,
+                       num_nodes, d_b_row_ptr, d_b_col_idx, d_b_values, d_x, d_y, 1.0f, 0.0f);
+    HIP_CHECK(hipDeviceSynchronize());
+
+    hipEvent_t start, stop;
+    HIP_CHECK(hipEventCreate(&start));
+    HIP_CHECK(hipEventCreate(&stop));
+
+    HIP_CHECK(hipEventRecord(start));
+    for (int it = 0; it < num_repeats; ++it) {
+        hipLaunchKernelGGL(spmv_bsr6x6_fp32_kernel, dim3(grid_size), dim3(block_size), 0, 0,
+                           num_nodes, d_b_row_ptr, d_b_col_idx, d_b_values, d_x, d_y, 1.0f, 0.0f);
+    }
+    HIP_CHECK(hipEventRecord(stop));
+    HIP_CHECK(hipEventSynchronize(stop));
+
+    float ms = 0.0f;
+    HIP_CHECK(hipEventElapsedTime(&ms, start, stop));
+    double avg_ms = (double)ms / num_repeats;
+
+    if (out_time_ms) *out_time_ms = avg_ms;
+
+    double bytes_per_pass = (double)nnz_blocks * 36.0 * 4.0
+                          + (double)nnz_blocks * 4.0
+                          + (double)(num_nodes + 1) * 4.0
+                          + (double)total_dofs * 4.0 * 2.0;
+
+    double bw_gbs = (bytes_per_pass / (avg_ms * 1e-3)) / 1e9;
+    if (out_bandwidth_gbs) *out_bandwidth_gbs = bw_gbs;
+
+    double flops = (double)nnz_blocks * 36.0 * 2.0;
+    double gf = (flops / (avg_ms * 1e-3)) / 1e9;
+    if (out_gflops) *out_gflops = gf;
+
+    hipEventDestroy(start);
+    hipEventDestroy(stop);
+    hipFree(d_b_row_ptr);
+    hipFree(d_b_col_idx);
+    hipFree(d_b_values);
+    hipFree(d_x);
+    hipFree(d_y);
+
+    return 0;
 }
 
 } // extern "C"

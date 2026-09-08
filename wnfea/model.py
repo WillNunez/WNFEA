@@ -187,6 +187,29 @@ class FEAModel:
         self.loads = [l for l in self.loads if l.is_geometry_node]
         self.clear_results()
 
+    # --- Export helpers ---
+    def export_vtu(self, filepath: str | Path, compute_stresses: bool = True, precision: int = 8) -> str:
+        """
+        Export this model to a ParaView VTK UnstructuredGrid (.vtu) file.
+        
+        Parameters
+        ----------
+        filepath : str | Path
+            Target destination path ending with .vtu.
+        compute_stresses : bool
+            Whether to compute and export Cauchy and Von Mises stresses if displacements exist.
+        precision : int
+            Floating point decimal formatting precision.
+
+        Returns
+        -------
+        out_path : str
+            Absolute path to the exported .vtu file.
+        """
+        from .results.vtu_exporter import VTUExporter
+        exporter = VTUExporter(precision=precision)
+        return exporter.export(self, filepath, compute_stresses=compute_stresses)
+
     # --- Summary ---
     def summary(self) -> str:
         """Return a human-readable summary of the model state."""

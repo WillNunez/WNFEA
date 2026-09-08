@@ -74,7 +74,10 @@ class GmshMesher:
             ) from e
 
         if not gmsh.isInitialized():
-            gmsh.initialize()
+            try:
+                gmsh.initialize(interruptible=False)
+            except TypeError:
+                gmsh.initialize()
 
         # Set output verbosity
         gmsh.option.setNumber("General.Terminal", 1 if self.verbose else 0)

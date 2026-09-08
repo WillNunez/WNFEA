@@ -158,8 +158,63 @@ def _get_hip_lib():
             ]
             lib.hip_amg_apply_vcycle_device.restype = ctypes.c_int
 
+            lib.hip_amg_set_coarse_sweeps.argtypes = [ctypes.c_void_p, ctypes.c_int]
+            lib.hip_amg_set_coarse_sweeps.restype = None
+
+            lib.hip_amg_solve_pcg.argtypes = [
+                ctypes.c_void_p, ctypes.c_void_p, ctypes.c_void_p,
+                ctypes.c_double, ctypes.c_int, ctypes.c_int, ctypes.c_int,
+                ctypes.POINTER(ctypes.c_int), ctypes.POINTER(ctypes.c_double)
+            ]
+            lib.hip_amg_solve_pcg.restype = ctypes.c_int
+
+            lib.hip_amg_solve_pcg_device.argtypes = [
+                ctypes.c_void_p, ctypes.c_void_p, ctypes.c_void_p,
+                ctypes.c_double, ctypes.c_int, ctypes.c_int, ctypes.c_int,
+                ctypes.POINTER(ctypes.c_int), ctypes.POINTER(ctypes.c_double)
+            ]
+            lib.hip_amg_solve_pcg_device.restype = ctypes.c_int
+
             lib.hip_amg_destroy.argtypes = [ctypes.c_void_p]
             lib.hip_amg_destroy.restype = None
+
+            lib.hip_assemble_beam_system_csr.argtypes = [
+                ctypes.c_int, ctypes.c_int,
+                ctypes.c_void_p, ctypes.c_void_p, ctypes.c_void_p,
+                ctypes.c_int,
+                ctypes.c_void_p, ctypes.c_void_p, ctypes.c_void_p,
+                ctypes.c_int, ctypes.c_void_p,
+                ctypes.c_void_p, ctypes.c_void_p, ctypes.c_int
+            ]
+            lib.hip_assemble_beam_system_csr.restype = ctypes.c_int
+
+            lib.hip_spmv_bsr6x6_fp32.argtypes = [
+                ctypes.c_int, ctypes.c_int,
+                ctypes.c_void_p, ctypes.c_void_p, ctypes.c_void_p,
+                ctypes.c_void_p, ctypes.c_void_p,
+                ctypes.c_float, ctypes.c_float,
+                ctypes.c_int, ctypes.c_int
+            ]
+            lib.hip_spmv_bsr6x6_fp32.restype = ctypes.c_int
+
+            lib.hip_spmv_bsr6x6_fp64.argtypes = [
+                ctypes.c_int, ctypes.c_int,
+                ctypes.c_void_p, ctypes.c_void_p, ctypes.c_void_p,
+                ctypes.c_void_p, ctypes.c_void_p,
+                ctypes.c_double, ctypes.c_double,
+                ctypes.c_int, ctypes.c_int
+            ]
+            lib.hip_spmv_bsr6x6_fp64.restype = ctypes.c_int
+
+            lib.hip_spmv_bsr6x6_benchmark.argtypes = [
+                ctypes.c_int, ctypes.c_int,
+                ctypes.c_void_p, ctypes.c_void_p, ctypes.c_void_p,
+                ctypes.c_int,
+                ctypes.POINTER(ctypes.c_double),
+                ctypes.POINTER(ctypes.c_double),
+                ctypes.POINTER(ctypes.c_double),
+            ]
+            lib.hip_spmv_bsr6x6_benchmark.restype = ctypes.c_int
 
             _HIP_LIB = lib
         except Exception:
@@ -538,4 +593,284 @@ def spmv_hip(
     if y is not y_contig:
         np.copyto(y, y_contig)
     return y
+
+
+def hip_solve_pcg_amg(
+    amg_preconditioner,
+    b: np.ndarray,
+    rtol: float = 1e-6,
+    max_iter: int = 500,
+    precision_mode: int | None = None,
+    check_interval: int = 1,
+    coarse_sweeps: int | None = None,
+) -> tuple[np.ndarray, int, float]:
+    """
+    Execute 100% GPU-Resident Preconditioned Conjugate Gradient (PCG) on AMD GPU.
+    The outer Krylov search vectors (u, r, p, q) stay resident in GPU VRAM,
+    eliminating all PCIe bus synchronization latency.
+
+    Args:
+        amg_preconditioner: An instance of BlockBeamAMGPreconditioner with gpu_handle != None.
+        b: Right-hand-side vector (numpy array).
+        rtol: Relative convergence tolerance (e.g. 1e-6).
+        max_iter: Maximum PCG iterations.
+        precision_mode: 0 for FP64 V-cycle, 1 for FP32 V-cycle, 2 for FP16 V-cycle.
+                        If None, uses amg_preconditioner.working_dtype.
+        check_interval: Number of iterations between host-device residual syncs (default: 1).
+                        Set to e.g. 4 for pure back-to-back GPU execution.
+        coarse_sweeps: Number of smoothing sweeps on coarsest AMG level.
+
+    Returns:
+        (u, iters, final_rel_residual)
+    """
+    hip_lib = _get_hip_lib()
+    if hip_lib is None:
+        raise RuntimeError("HIP kernel library (wnfea_hip_kernels.dll) is not available.")
+
+    if getattr(amg_preconditioner, "gpu_handle", None) is None:
+        raise ValueError("Provided AMG preconditioner does not have an active GPU handle.")
+
+    if coarse_sweeps is not None and coarse_sweeps > 0:
+        hip_lib.hip_amg_set_coarse_sweeps(amg_preconditioner.gpu_handle, ctypes.c_int(coarse_sweeps))
+
+    if precision_mode is None:
+        if getattr(amg_preconditioner, "use_tri_precision", False):
+            precision_mode = 2  # FP16
+        elif amg_preconditioner.working_dtype == np.float32:
+            precision_mode = 1  # FP32
+        else:
+            precision_mode = 0  # FP64
+
+    b_contig = np.ascontiguousarray(b, dtype=np.float64)
+    u_out = np.zeros_like(b_contig)
+    iters_out = ctypes.c_int(0)
+    res_out = ctypes.c_double(0.0)
+
+    err = hip_lib.hip_amg_solve_pcg(
+        amg_preconditioner.gpu_handle,
+        b_contig.ctypes.data,
+        u_out.ctypes.data,
+        ctypes.c_double(rtol),
+        ctypes.c_int(max_iter),
+        ctypes.c_int(precision_mode),
+        ctypes.c_int(check_interval),
+        ctypes.byref(iters_out),
+        ctypes.byref(res_out),
+    )
+    if err != 0:
+        raise RuntimeError(f"hip_amg_solve_pcg failed with error code {err}")
+
+    return u_out, iters_out.value, res_out.value
+
+
+def hip_assemble_beam_system_csr(
+    nodes: np.ndarray,
+    elements: np.ndarray,
+    props: np.ndarray,
+    csr_row_ptr: np.ndarray | None = None,
+    csr_col_idx: np.ndarray | None = None,
+    csr_values: np.ndarray | None = None,
+    fixed_dofs: np.ndarray | None = None,
+    F: np.ndarray | None = None,
+    direct_scatter: bool = True,
+    compute_elem_vals: bool = False,
+) -> tuple[np.ndarray | None, np.ndarray | None, np.ndarray | None]:
+    """
+    Assemble the global 3D beam stiffness matrix using native GPU HIP kernels.
+
+    Args:
+        nodes: [N, 3] float64 node coordinates.
+        elements: [E, 2] int32 element node indices.
+        props: [E, 6] float64 element properties (E, G, A, Iy, Iz, J).
+        csr_row_ptr: [N*6 + 1] int32 CSR row pointer (optional for direct scatter).
+        csr_col_idx: [NNZ] int32 CSR column index (optional for direct scatter).
+        csr_values: [NNZ] float64 CSR value buffer (will be populated on GPU).
+        fixed_dofs: [num_fixed] int32 indices of constrained DOFs.
+        F: [N*6] float64 right-hand side force vector.
+        direct_scatter: Whether to scatter directly into csr_values on GPU.
+        compute_elem_vals: Whether to compute and return raw [E, 144] element matrices.
+
+    Returns:
+        (csr_values, F, elem_vals)
+    """
+    hip_lib = _get_hip_lib()
+    if hip_lib is None or not hasattr(hip_lib, "hip_assemble_beam_system_csr"):
+        raise RuntimeError("hip_assemble_beam_system_csr not available in HIP DLL.")
+
+    num_nodes = len(nodes)
+    num_elements = len(elements)
+
+    nodes_c = np.ascontiguousarray(nodes, dtype=np.float64)
+    elements_c = np.ascontiguousarray(elements, dtype=np.int32)
+    props_c = np.ascontiguousarray(props, dtype=np.float64)
+
+    nnz = len(csr_col_idx) if csr_col_idx is not None else 0
+    row_ptr_data = csr_row_ptr.ctypes.data if csr_row_ptr is not None else None
+    col_idx_data = csr_col_idx.ctypes.data if csr_col_idx is not None else None
+
+    if direct_scatter:
+        if csr_values is None:
+            csr_values = np.zeros(nnz, dtype=np.float64)
+        csr_values_c = np.ascontiguousarray(csr_values, dtype=np.float64)
+        csr_values_data = csr_values_c.ctypes.data
+    else:
+        csr_values_c = None
+        csr_values_data = None
+
+    if fixed_dofs is not None and len(fixed_dofs) > 0:
+        fixed_c = np.ascontiguousarray(fixed_dofs, dtype=np.int32)
+        fixed_data = fixed_c.ctypes.data
+        num_fixed = len(fixed_c)
+    else:
+        fixed_data = None
+        num_fixed = 0
+
+    if F is not None:
+        F_c = np.ascontiguousarray(F, dtype=np.float64)
+        F_data = F_c.ctypes.data
+    else:
+        F_c = None
+        F_data = None
+
+    if compute_elem_vals:
+        elem_vals = np.empty((num_elements, 144), dtype=np.float64)
+        elem_vals_data = elem_vals.ctypes.data
+    else:
+        elem_vals = None
+        elem_vals_data = None
+
+    err = hip_lib.hip_assemble_beam_system_csr(
+        ctypes.c_int(num_nodes),
+        ctypes.c_int(num_elements),
+        nodes_c.ctypes.data,
+        elements_c.ctypes.data,
+        props_c.ctypes.data,
+        ctypes.c_int(nnz),
+        row_ptr_data,
+        col_idx_data,
+        csr_values_data,
+        ctypes.c_int(num_fixed),
+        fixed_data,
+        F_data,
+        elem_vals_data,
+        ctypes.c_int(1 if direct_scatter else 0),
+    )
+
+    if err != 0:
+        raise RuntimeError(f"hip_assemble_beam_system_csr failed with error code {err}")
+
+    return csr_values_c, F_c, elem_vals
+
+
+def hip_spmv_bsr6x6(
+    K_bsr,
+    x: np.ndarray,
+    y: np.ndarray | None = None,
+    alpha: float = 1.0,
+    beta: float = 0.0,
+) -> np.ndarray:
+    """
+    Execute BSR 6x6 SpMV on AMD GPU: y = alpha * K_bsr * x + beta * y.
+    """
+    hip_lib = _get_hip_lib()
+    if hip_lib is None:
+        from .bsr_matrix import bsr6x6_spmv_cpu
+        y_cpu = bsr6x6_spmv_cpu(K_bsr, x, y)
+        if alpha != 1.0 or beta != 0.0:
+            return alpha * y_cpu + beta * (y if y is not None else 0.0)
+        return y_cpu
+
+    n_nodes = K_bsr.n_nodes
+    nnz_blocks = K_bsr.nnz_blocks
+    total_dofs = n_nodes * 6
+
+    is_fp32 = (K_bsr.dtype == np.float32)
+    dtype = np.float32 if is_fp32 else np.float64
+
+    b_row_ptr_c = np.ascontiguousarray(K_bsr.block_row_ptr, dtype=np.int32)
+    b_col_idx_c = np.ascontiguousarray(K_bsr.block_col_idx, dtype=np.int32)
+    b_values_c = np.ascontiguousarray(K_bsr.values, dtype=dtype)
+
+    x_c = np.ascontiguousarray(x, dtype=dtype)
+    if y is None:
+        y_c = np.zeros(total_dofs, dtype=dtype)
+    else:
+        y_c = np.ascontiguousarray(y, dtype=dtype)
+
+    if is_fp32:
+        err = hip_lib.hip_spmv_bsr6x6_fp32(
+            ctypes.c_int(n_nodes),
+            ctypes.c_int(nnz_blocks),
+            b_row_ptr_c.ctypes.data,
+            b_col_idx_c.ctypes.data,
+            b_values_c.ctypes.data,
+            x_c.ctypes.data,
+            y_c.ctypes.data,
+            ctypes.c_float(alpha),
+            ctypes.c_float(beta),
+            ctypes.c_int(256),
+            ctypes.c_int(0),
+        )
+    else:
+        err = hip_lib.hip_spmv_bsr6x6_fp64(
+            ctypes.c_int(n_nodes),
+            ctypes.c_int(nnz_blocks),
+            b_row_ptr_c.ctypes.data,
+            b_col_idx_c.ctypes.data,
+            b_values_c.ctypes.data,
+            x_c.ctypes.data,
+            y_c.ctypes.data,
+            ctypes.c_double(alpha),
+            ctypes.c_double(beta),
+            ctypes.c_int(256),
+            ctypes.c_int(0),
+        )
+
+    if err != 0:
+        raise RuntimeError(f"hip_spmv_bsr6x6 failed with error code {err}")
+
+    return y_c
+
+
+def hip_spmv_bsr6x6_benchmark(
+    K_bsr,
+    num_repeats: int = 100,
+) -> tuple[float, float, float]:
+    """
+    Direct in-VRAM benchmark of BSR 6x6 SpMV throughput on AMD GPU.
+    Returns (avg_time_ms, effective_bandwidth_gbs, throughput_gflops).
+    """
+    hip_lib = _get_hip_lib()
+    if hip_lib is None:
+        raise RuntimeError("HIP library not available for GPU benchmark.")
+
+    n_nodes = K_bsr.n_nodes
+    nnz_blocks = K_bsr.nnz_blocks
+
+    b_row_ptr_c = np.ascontiguousarray(K_bsr.block_row_ptr, dtype=np.int32)
+    b_col_idx_c = np.ascontiguousarray(K_bsr.block_col_idx, dtype=np.int32)
+    b_values_c = np.ascontiguousarray(K_bsr.values, dtype=np.float32)
+
+    out_time_ms = ctypes.c_double(0.0)
+    out_bw = ctypes.c_double(0.0)
+    out_gf = ctypes.c_double(0.0)
+
+    err = hip_lib.hip_spmv_bsr6x6_benchmark(
+        ctypes.c_int(n_nodes),
+        ctypes.c_int(nnz_blocks),
+        b_row_ptr_c.ctypes.data,
+        b_col_idx_c.ctypes.data,
+        b_values_c.ctypes.data,
+        ctypes.c_int(num_repeats),
+        ctypes.byref(out_time_ms),
+        ctypes.byref(out_bw),
+        ctypes.byref(out_gf),
+    )
+
+    if err != 0:
+        raise RuntimeError(f"hip_spmv_bsr6x6_benchmark failed with error code {err}")
+
+    return float(out_time_ms.value), float(out_bw.value), float(out_gf.value)
+
+
 
