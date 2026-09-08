@@ -14,3 +14,8 @@ graphify-out/
 *.bin
 *.exp
 
+# Simulation and mesh output files
+*.vtu
+*.pvsm
+results/*.vtu
+results/*.pvsm

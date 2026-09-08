@@ -294,7 +294,7 @@ def benchmark_full_pcg_solve():
     u_cpu, info_cpu = cg(A_csr, b, M=amg_cpu, rtol=1e-6, maxiter=500, callback=cpu_cb)
     t_cpu = (time.perf_counter() - t0) * 1000
 
-    # 3. Benchmark GPU PCG Solve
+    # 3. Benchmark Hybrid GPU V-Cycle PCG (SciPy outer loop with GPU V-cycles)
     gpu_iters = 0
     def gpu_cb(rk):
         nonlocal gpu_iters
@@ -304,19 +304,34 @@ def benchmark_full_pcg_solve():
     u_gpu, info_gpu = cg(A_csr, b, M=amg_gpu, rtol=1e-6, maxiter=500, callback=gpu_cb)
     t_gpu = (time.perf_counter() - t0) * 1000
 
-    rel_diff = np.linalg.norm(u_cpu - u_gpu) / np.linalg.norm(u_cpu)
-    speedup = t_cpu / t_gpu
+    # 4. Benchmark 100% GPU Resident PCG (Zero PCIe round-trips, Vector-4 kernels)
+    t0 = time.perf_counter()
+    u_res, res_iters, res_rel = amg_gpu.solve_pcg(b, rtol=1e-6, max_iter=500, precision_mode=0)
+    t_res = (time.perf_counter() - t0) * 1000
 
-    print("-" * 75)
-    print(f"{'Solver Configuration':<28} | {'Iters':<8} | {'Solve Time (ms)':<16} | {'Speedup':<10}")
-    print("-" * 75)
-    print(f"{'Host CPU AMG PCG':<28} | {cpu_iters:<8} | {t_cpu:<16.2f} | {'1.00x (ref)':<10}")
-    print(f"{'AMD RX 7800 XT GPU AMG PCG':<28} | {gpu_iters:<8} | {t_gpu:<16.2f} | {f'{speedup:.2f}x':<10}")
-    print("-" * 75)
-    print(f"Solution Relative Difference: {rel_diff:.4e}")
+    # 5. Benchmark 100% GPU Resident Mixed-Precision PCG (FP32 V-Cycle in FP64 PCG)
+    t0 = time.perf_counter()
+    u_res_fp32, res_iters_fp32, res_rel_fp32 = amg_gpu.solve_pcg(b, rtol=1e-6, max_iter=500, precision_mode=1)
+    t_res_fp32 = (time.perf_counter() - t0) * 1000
+
+    rel_diff = np.linalg.norm(u_cpu - u_gpu) / np.linalg.norm(u_cpu)
+    rel_diff_res = np.linalg.norm(u_cpu - u_res) / np.linalg.norm(u_cpu)
+    rel_diff_fp32 = np.linalg.norm(u_cpu - u_res_fp32) / np.linalg.norm(u_cpu)
+
+    print("-" * 80)
+    print(f"{'Solver Configuration':<32} | {'Iters':<8} | {'Solve Time (ms)':<16} | {'Speedup':<10}")
+    print("-" * 80)
+    print(f"{'Host CPU AMG PCG':<32} | {cpu_iters:<8} | {t_cpu:<16.2f} | {'1.00x (ref)':<10}")
+    print(f"{'Hybrid GPU V-Cycle PCG':<32} | {gpu_iters:<8} | {t_gpu:<16.2f} | {f'{t_cpu/t_gpu:.2f}x':<10}")
+    print(f"{'100% Resident GPU PCG (FP64)':<32} | {res_iters:<8} | {t_res:<16.2f} | {f'{t_cpu/t_res:.2f}x':<10}")
+    print(f"{'100% Resident GPU PCG (FP32)':<32} | {res_iters_fp32:<8} | {t_res_fp32:<16.2f} | {f'{t_cpu/t_res_fp32:.2f}x':<10}")
+    print("-" * 80)
+    print(f"Hybrid GPU Rel Diff vs CPU:     {rel_diff:.4e}")
+    print(f"100% Resident FP64 Rel Diff:    {rel_diff_res:.4e}")
+    print(f"100% Resident FP32 Rel Diff:    {rel_diff_fp32:.4e}")
 
     assert info_cpu == 0 and info_gpu == 0, "PCG solve failed"
-    assert rel_diff < 1e-6, f"Solutions differ: {rel_diff}"
+    assert rel_diff < 1e-6 and rel_diff_res < 1e-3, f"Solutions differ"
     print(" [PASSED] Full end-to-end GPU PCG solve verified!")
 
 

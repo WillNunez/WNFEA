@@ -28,6 +28,7 @@ from .solver.dof_manager import DOFManager
 from .solver.mixed_precision import PrecisionConfig, MIXED_FP32, TRI_PRECISION, FULL_FP64
 from .results.post_processor import PostProcessor, PostProcessError
 from .results.result_data import StressPoint, ElementResult, ModelResults
+from .results.vtu_exporter import VTUExporter
 from .elements import (
     element_stiffness_c3d10,
     element_internal_forces_c3d10,
@@ -65,6 +66,7 @@ __all__ = [
     # Results
     "PostProcessor", "PostProcessError",
     "StressPoint", "ElementResult", "ModelResults",
+    "VTUExporter",
 ]
 
 
