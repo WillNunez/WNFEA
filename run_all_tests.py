@@ -28,6 +28,7 @@ TEST_SUITES = [
     ("Non-Linear JFNK Neural & Surrogate Warm-Start", [sys.executable, os.path.join("tests", "test_neural_warm_start.py")]),
     ("Dual-Stage Voxel First-Pass & Sub-Modeling Pipeline", [sys.executable, os.path.join("tests", "test_dual_stage_pipeline.py")]),
     ("In-the-Loop Topology Optimization & Generative Design", [sys.executable, os.path.join("tests", "test_topology_optimization.py")]),
+    ("FreeCAD B-Rep STEP Reconstruction & ParaView Pipeline", [sys.executable, os.path.join("tests", "test_cad_paraview_pipeline.py")]),
 ]
 
 
