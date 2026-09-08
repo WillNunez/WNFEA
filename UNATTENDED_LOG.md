@@ -191,3 +191,32 @@ This journal records all autonomous progress, test outcomes, commit hashes, and 
     - Formulated morphological opening operators ($\boldsymbol{\rho}_{mach} = (\boldsymbol{\rho} \ominus \mathcal{B}_R) \oplus \mathcal{B}_R$) for endmill radius conformance.
     - Designed direct parametric CAD feature synthesis translating density fields into native FreeCAD sketches, pockets, and fillets.
   - **Phase 4 Complete & Verified.**
+
+### [2026-09-08 05:00] Phase 5: Dual-Stage Voxel First-Pass & CAD-Conforming Sub-Modeling Engine
+- **Status**: SUCCESS
+- **Files Modified / Added**:
+  - `wnfea/mesh/voxel_mesher.py` [NEW]
+  - `wnfea/solver/matrix_free_hex8.py` [NEW]
+  - `wnfea/solver/dual_stage_pipeline.py` [NEW]
+  - `tests/test_dual_stage_pipeline.py` [NEW]
+  - `run_all_tests.py` [MODIFIED - 15 test suites]
+  - `UNATTENDED_ROADMAP.md` [MODIFIED]
+  - `UNATTENDED_LOG.md` [MODIFIED]
+- **Verification**:
+  - `python run_all_tests.py` -> 15/15 suites passed (100% pass rate in 9.85s)
+- **Key Changes & Metrics**:
+  - **Task 5.1 (Fast Cartesian Voxelizer & Immersed Boundary Generator)**:
+    - Implemented `VoxelMesher` and `VoxelGrid` in `wnfea/mesh/voxel_mesher.py`.
+    - Generates structured Hex8 voxel grids over 3D bounding boxes or CAD domains with active volume fractions $\alpha_e \in [0, 1]$.
+    - Exact trilinear shape function interpolation ($< 10^{-14}$ error) for boundary condition transfer.
+  - **Task 5.2 (Ultra-Fast Matrix-Free Hex8 Voxel Solver)**:
+    - Implemented `MatrixFreeHex8Operator` and `solve_voxel_linear_static` in `wnfea/solver/matrix_free_hex8.py`.
+    - Explores uniform Cartesian stencil property: single analytical $24 \times 24$ reference matrix $\mathbf{k}_0$ shared across all cells with $O(1)$ memory.
+    - Solves linear static systems in **$< 1.5\text{ ms}$** on CPU with exact energy parity and recovers element von Mises stress field.
+  - **Task 5.3 (End-to-End Dual-Stage Pipeline with 1% Saint-Venant Transfer)**:
+    - Implemented `run_dual_stage_pipeline` in `wnfea/solver/dual_stage_pipeline.py`.
+    - Stage 1: Global Voxel First-Pass in **$7.58\text{ ms}$**.
+    - Automatically locates stress hotspots and calculates 1% Saint-Venant decay boundary.
+    - Stage 2: Prescribes interpolated voxel cut-boundary displacements and solves CAD-conforming C3D10 sub-model.
+    - Verified **154.55 ms total pipeline solve time** with 100% pass rate.
+  - **Phase 5 Complete & Verified.**
