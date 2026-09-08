@@ -1,4 +1,4 @@
-﻿# WNFEA 72-Hour Unattended Autonomous Development Roadmap (10x SOTA Engine)
+# WNFEA 72-Hour Unattended Autonomous Development Roadmap (10x SOTA Engine)
 
 This document is the persistent execution backlog for autonomous development of a state-of-the-art structural FEA engine targeting 10x market speedups.
 
@@ -14,7 +14,7 @@ This document is the persistent execution backlog for autonomous development of 
 ## Task Backlog
 
 ### Phase 1: Matrix-Free C3D10 Operator & VRAM Minimization (Target: 2M DOFs in <300MB VRAM)
-- [ ] **Task 1.1: Matrix-Free C3D10 Evaluation Engine**
+- [x] **Task 1.1: Matrix-Free C3D10 Evaluation Engine**
   - **Objective**: Implement matrix-free operator `K @ u` in `wnfea/solver/matrix_free_c3d10.py` that computes element-level actions on-the-fly without assembling or storing global stiffness matrices.
   - **Acceptance Criteria**: Exact numerical parity with explicit CSR matrix (< 1e-12 relative error) while reducing memory consumption by >95%.
   - **Verification**: `python run_all_tests.py`.

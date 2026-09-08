@@ -1,4 +1,4 @@
-﻿#!/usr/bin/env python3
+#!/usr/bin/env python3
 """
 WNFEA Autonomous Verification Gate and Test Suite Runner
 -------------------------------------------------------
@@ -19,6 +19,7 @@ TEST_SUITES = [
     ("6-DOF / 3-DOF Direct Elimination and Coupling", [sys.executable, "test_dof_coupling.py"]),
     ("AMD HIP GPU vs CPU Parity", [sys.executable, "test_gpu.py"]),
     ("Non-Linear JFNK and AMG Large Deflection", [sys.executable, "test_nonlinear_jfnk.py"]),
+    ("Matrix-Free C3D10 Operator & PCG Parity", [sys.executable, os.path.join("tests", "test_matrix_free_c3d10.py")]),
 ]
 
 TIMEOUT_SECONDS = 90  # 90-second safety timeout per suite
