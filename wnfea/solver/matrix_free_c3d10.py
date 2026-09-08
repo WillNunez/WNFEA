@@ -189,12 +189,29 @@ class MatrixFreeC3D10Operator(LinearOperator):
             dtype=self.dtype,
         )
 
+    def get_pmultigrid_preconditioner(
+        self,
+        omega: float = 0.67,
+        pre_sweeps: int = 1,
+        post_sweeps: int = 1,
+    ) -> LinearOperator:
+        """Return the two-level geometric p-multigrid preconditioner M^{-1}."""
+        from .pmultigrid_c3d10 import PMultigridC3D10Preconditioner
+        return PMultigridC3D10Preconditioner(
+            self,
+            omega=omega,
+            pre_sweeps=pre_sweeps,
+            post_sweeps=post_sweeps,
+        )
+
     def solve_pcg(
         self,
         F: np.ndarray,
         tol: float = 1e-6,
         maxiter: int = 1000,
         x0: Optional[np.ndarray] = None,
+        M: Optional[LinearOperator] = None,
+        preconditioner: str = "jacobi",
         callback: Optional[Callable[[int, float], None]] = None,
     ) -> tuple[np.ndarray, dict]:
         """
@@ -206,6 +223,8 @@ class MatrixFreeC3D10Operator(LinearOperator):
         tol : Relative residual convergence tolerance (||r|| / ||b||).
         maxiter : Maximum number of PCG iterations.
         x0 : Optional warm-start initial guess vector.
+        M : Optional custom LinearOperator preconditioner M^{-1}.
+        preconditioner : "jacobi", "pmultigrid", or "none". Used if M is None.
         callback : Optional callback invoked each iteration: callback(iter, rel_res).
 
         Returns
@@ -222,6 +241,21 @@ class MatrixFreeC3D10Operator(LinearOperator):
         if b_norm == 0.0:
             return np.zeros(self.n_dofs, dtype=self.dtype), {"converged": True, "iterations": 0, "residual": 0.0}
 
+        # Resolve preconditioner operator
+        if M is not None:
+            precond_op = M
+        elif preconditioner.lower() == "pmultigrid":
+            precond_op = self.get_pmultigrid_preconditioner()
+        elif preconditioner.lower() == "jacobi":
+            precond_op = self.get_preconditioner()
+        else:
+            precond_op = None
+
+        def apply_M(vec: np.ndarray) -> np.ndarray:
+            if precond_op is not None:
+                return precond_op.matvec(vec)
+            return vec * self.inv_diag_K
+
         u = np.zeros(self.n_dofs, dtype=self.dtype) if x0 is None else np.copy(x0).astype(self.dtype)
         if self.apply_bcs and len(self.fixed_dofs) > 0:
             u[self.fixed_dofs] = 0.0
@@ -230,7 +264,10 @@ class MatrixFreeC3D10Operator(LinearOperator):
         if self.apply_bcs and len(self.fixed_dofs) > 0:
             r[self.fixed_dofs] = 0.0
 
-        z = r * self.inv_diag_K
+        z = apply_M(r)
+        if self.apply_bcs and len(self.fixed_dofs) > 0:
+            z[self.fixed_dofs] = 0.0
+
         p = np.copy(z)
         rz_old = np.dot(r, z)
 
@@ -244,7 +281,7 @@ class MatrixFreeC3D10Operator(LinearOperator):
                 Ap[self.fixed_dofs] = 0.0
 
             pAp = np.dot(p, Ap)
-            if pAp <= 0.0:
+            if abs(pAp) < 1e-30:
                 break
 
             alpha = rz_old / pAp
@@ -256,15 +293,21 @@ class MatrixFreeC3D10Operator(LinearOperator):
             rel_res = np.linalg.norm(r) / b_norm
             res_history.append(rel_res)
 
-            if callback:
+            if callback is not None:
                 callback(k, rel_res)
 
             if rel_res < tol:
                 converged = True
                 break
 
-            z = r * self.inv_diag_K
+            z = apply_M(r)
+            if self.apply_bcs and len(self.fixed_dofs) > 0:
+                z[self.fixed_dofs] = 0.0
+
             rz_new = np.dot(r, z)
+            if abs(rz_old) < 1e-30:
+                break
+
             beta = rz_new / rz_old
             p = z + beta * p
             rz_old = rz_new

@@ -20,7 +20,9 @@ TEST_SUITES = [
     ("AMD HIP GPU vs CPU Parity", [sys.executable, "test_gpu.py"]),
     ("Non-Linear JFNK and AMG Large Deflection", [sys.executable, "test_nonlinear_jfnk.py"]),
     ("Matrix-Free C3D10 Operator & PCG Parity", [sys.executable, os.path.join("tests", "test_matrix_free_c3d10.py")]),
+    ("Two-Level Geometric p-Multigrid Preconditioner", [sys.executable, os.path.join("tests", "test_pmultigrid.py")]),
 ]
+
 
 TIMEOUT_SECONDS = 90  # 90-second safety timeout per suite
 
