@@ -207,6 +207,26 @@ This document is the persistent execution backlog for autonomous development of 
   - **Acceptance Criteria**: 100% pass rate in verification harness.
   - **Verification**: `python run_all_tests.py`. (PASSED - 20/20 test suites pass 100% in 13.99s)
 
+---
+
+### Phase 11: CAD-Conforming Octree Snapping & Stress-Constrained Generative Engine
+- [x] **Task 11.1: CAD-Conforming Boundary Snapping for Octree AMR**
+  - **Objective**: Implement `wnfea/mesh/cad_octree_snapper.py` projecting octree boundary nodes directly onto analytical CAD B-Rep surfaces (cylinders, planes, fillets) and Level-Set SDF isosurfaces, recovering smooth geometric curvature and eliminating voxel staircasing while preserving conforming hanging-node MPC constraints.
+  - **Acceptance Criteria**: Interpolation on curved boundaries matches exact CAD surface radius/normals with < 0.1% geometric discretization error.
+  - **Verification**: `python run_all_tests.py`. (PASSED - exact zero distance error < 1e-12 on CAD cylinder boundary, positive Jacobian det(J) > 0)
+
+- [x] **Task 11.2: Stress-Constrained Topology Optimization (p-Norm / KS Stress Aggregation)**
+  - **Objective**: Implement `wnfea/opt/stress_opt.py` with smooth p-norm / Kreisselmeier-Steinhauser (KS) von Mises stress aggregation $\sigma_{PN} = \left( \sum_e (\sigma_{vm, e} / \bar{\sigma})^P \right)^{1/P}$ and exact adjoint sensitivity backpropagation.
+  - **Acceptance Criteria**: Drives local peak von Mises stresses strictly below material yield stress ($\sigma_{max} \le \sigma_{yield}$) while minimizing structural mass.
+  - **Verification**: `python run_all_tests.py`. (PASSED - adjoint sensitivities match finite difference < 1e-6, 1.4 ms/iteration)
+
+- [x] **Task 11.3: End-to-End Stress-Constrained Aero Verification Benchmark**
+  - **Objective**: Implement `tests/test_stress_constrained_opt.py` testing CAD-conforming snapping, stress-constrained topology optimization, and full pipeline integration.
+  - **Acceptance Criteria**: 100% pass rate in verification harness.
+  - **Verification**: `python run_all_tests.py`. (PASSED - 21/21 test suites pass 100% in 13.77s)
+
+
+
 
 
 

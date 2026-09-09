@@ -23,6 +23,13 @@ from .machinability import (
     apply_3axis_milling_filter,
 )
 
+from .stress_opt import (
+    StressConstrainedTopologyOptimizer,
+    StressConstraintConfig,
+    StressOptResult,
+    StressAggregationType,
+)
+
 __all__ = [
     "TopologyOptimizer",
     "TopologyConfig",
@@ -33,4 +40,8 @@ __all__ = [
     "FiveAxisMachinabilityOptimizer",
     "FiveAxisSetupResult",
     "apply_3axis_milling_filter",
+    "StressConstrainedTopologyOptimizer",
+    "StressConstraintConfig",
+    "StressOptResult",
+    "StressAggregationType",
 ]

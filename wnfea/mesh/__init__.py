@@ -18,6 +18,16 @@ from .submodeling import (
     solve_spherical_submodel,
 )
 
+from .cad_octree_snapper import (
+    CADSurface,
+    CylinderCADSurface,
+    SphereCADSurface,
+    PlaneCADSurface,
+    SDFCADSurface,
+    CADOctreeSnapper,
+    compute_hex8_min_jacobian,
+)
+
 __all__ = [
     "BeamMesher",
     "MeshError",
@@ -34,5 +44,12 @@ __all__ = [
     "compute_spherical_decay_radius",
     "extract_spherical_submodel",
     "solve_spherical_submodel",
+    "CADSurface",
+    "CylinderCADSurface",
+    "SphereCADSurface",
+    "PlaneCADSurface",
+    "SDFCADSurface",
+    "CADOctreeSnapper",
+    "compute_hex8_min_jacobian",
 ]
 

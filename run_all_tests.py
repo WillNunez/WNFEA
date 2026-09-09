@@ -32,6 +32,7 @@ TEST_SUITES = [
     ("Multi-Load Topology & 5-Axis CNC Optimization", [sys.executable, os.path.join("tests", "test_phase8_multiload_5axis.py")]),
     ("Matrix-Free Modal Dynamic Eigen-Solver & Octree AMR", [sys.executable, os.path.join("tests", "test_modal_analysis.py")]),
     ("Thermal-Structural Conduction & Thermo-Mechanical Engine", [sys.executable, os.path.join("tests", "test_thermal_structural.py")]),
+    ("CAD-Conforming AMR Snapping & Stress Optimization", [sys.executable, os.path.join("tests", "test_stress_constrained_opt.py")]),
 ]
 
 
