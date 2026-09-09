@@ -33,6 +33,7 @@ TEST_SUITES = [
     ("Matrix-Free Modal Dynamic Eigen-Solver & Octree AMR", [sys.executable, os.path.join("tests", "test_modal_analysis.py")]),
     ("Thermal-Structural Conduction & Thermo-Mechanical Engine", [sys.executable, os.path.join("tests", "test_thermal_structural.py")]),
     ("CAD-Conforming AMR Snapping & Stress Optimization", [sys.executable, os.path.join("tests", "test_stress_constrained_opt.py")]),
+    ("Multi-Fidelity Voxel-to-AMR Iterative Adaptive Engine", [sys.executable, os.path.join("tests", "test_adaptive_subdomain_pipeline.py")]),
 ]
 
 

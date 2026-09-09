@@ -28,6 +28,12 @@ from .cad_octree_snapper import (
     compute_hex8_min_jacobian,
 )
 
+from .decay_boundary import (
+    DecayBoundaryResult,
+    compute_successive_refinement_decay_radius,
+    compute_stress_decay_radius_from_field,
+)
+
 __all__ = [
     "BeamMesher",
     "MeshError",
@@ -51,5 +57,8 @@ __all__ = [
     "SDFCADSurface",
     "CADOctreeSnapper",
     "compute_hex8_min_jacobian",
+    "DecayBoundaryResult",
+    "compute_successive_refinement_decay_radius",
+    "compute_stress_decay_radius_from_field",
 ]
 

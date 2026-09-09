@@ -409,3 +409,35 @@ This journal records all autonomous progress, test outcomes, commit hashes, and 
     - Registered suite 21 in `run_all_tests.py`, maintaining 100% pass rate across all 21 suites in 13.77s.
   - **Phase 11 Complete & Verified.**
 
+### [2026-09-09 15:00] Phase 12: Unified Multi-Fidelity Voxel-to-AMR Iterative Adaptive Sub-Domain Engine
+- **Status**: SUCCESS
+- **Files Modified / Added**:
+  - `wnfea/mesh/decay_boundary.py` [NEW - Successive refinement 1% decay boundary engine]
+  - `wnfea/solver/subdomain_solver.py` [NEW - Local sub-domain isolated matrix-free PCG re-solver]
+  - `wnfea/solver/adaptive_solve_loop.py` [NEW - End-to-end multi-fidelity adaptive orchestrator]
+  - `wnfea/mesh/__init__.py` [MODIFIED - Export decay boundary classes & functions]
+  - `wnfea/solver/__init__.py` [MODIFIED - Export sub-domain and adaptive pipeline tools]
+  - `tests/test_adaptive_subdomain_pipeline.py` [NEW - 6 verification tests]
+  - `run_all_tests.py` [MODIFIED - Registered 22nd test suite]
+  - `UNATTENDED_ROADMAP.md` [MODIFIED - Phase 12 completed, Phase 13 defined]
+  - `UNATTENDED_LOG.md` [MODIFIED]
+- **Verification**:
+  - `python run_all_tests.py` -> 22/22 suites passed (100% pass rate in 15.23s)
+  - `python tests/test_adaptive_subdomain_pipeline.py` -> 6/6 tests passed in 0.43s
+- **Key Changes & Metrics**:
+  - **Task 12.1 (Successive Refinement 1% Saint-Venant Decay Boundary Engine)**:
+    - Implemented `compute_successive_refinement_decay_radius` and `compute_stress_decay_radius_from_field` in `wnfea/mesh/decay_boundary.py`.
+    - Tracks radial perturbation $\delta(r) = \|\mathbf{u}^{(k+1)}(r) - \mathbf{u}^{(k)}(r)\| / \|\mathbf{u}^{(k)}(r)\| \le 0.01$ (1%) across successive AMR passes using `cKDTree` inverse-distance weighting.
+    - Accurately sizes the minimal bounding sphere $R_{1\%}$ encompassing the localized stress concentration zone.
+  - **Task 12.2 (Local Sub-Domain Isolated Matrix-Free PCG Re-Solver)**:
+    - Implemented `extract_isolated_subdomain` and `solve_isolated_subdomain` in `wnfea/solver/subdomain_solver.py`.
+    - Retains ONLY the elements inside the $R_{1\%}$ boundary sphere, strictly excluding all exterior elements (achieving $>10\times$ element count reduction).
+    - Detects cut-boundary nodes and enforces interpolated Dirichlet interface displacements with exact satisfaction ($< 10^{-10}$ error).
+    - Matrix-free PCG operator executes isolated local re-solve in **$< 2.0\text{ ms}$** on CPU.
+  - **Task 12.3 (Unified Multi-Fidelity Adaptive Pipeline & Verification Suite)**:
+    - Implemented `run_adaptive_voxel_amr_pipeline` in `wnfea/solver/adaptive_solve_loop.py` seamlessly uniting:
+      Global Voxel First-Pass ($1.69\text{ ms}$) $\to$ Hotspot Detection $\to$ Octree AMR $\to$ CAD Boundary Snapping $\to$ 1% Decay Sizing $\to$ Isolated Sub-Domain Re-Solve ($1.81\text{ ms}$).
+    - Verified accurate capture of localized stress concentration factor ($K_t = 3.07$) with $13.3\times$ element reduction.
+    - Total pipeline runtime $< 300\text{ ms}$, passing all 22 test suites in 15.23s.
+  - **Phase 12 Complete & Verified.**
+

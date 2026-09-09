@@ -19,6 +19,18 @@ from .thermal_solver import (
     solve_thermo_mechanical,
 )
 
+from .subdomain_solver import (
+    IsolatedSubdomain,
+    SubdomainSolveResult,
+    extract_isolated_subdomain,
+    solve_isolated_subdomain,
+)
+
+from .adaptive_solve_loop import (
+    AdaptiveSubdomainResult,
+    run_adaptive_voxel_amr_pipeline,
+)
+
 __all__ = [
     "BeamSolver",
     "SolverError",
@@ -41,5 +53,11 @@ __all__ = [
     "compute_thermal_load_vector",
     "compute_thermo_mechanical_stresses",
     "solve_thermo_mechanical",
+    "IsolatedSubdomain",
+    "SubdomainSolveResult",
+    "extract_isolated_subdomain",
+    "solve_isolated_subdomain",
+    "AdaptiveSubdomainResult",
+    "run_adaptive_voxel_amr_pipeline",
 ]
 
