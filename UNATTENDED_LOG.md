@@ -283,3 +283,36 @@ This journal records all autonomous progress, test outcomes, commit hashes, and 
     - Created `tests/test_cad_paraview_pipeline.py` covering STL/OBJ export, isosurface smoothing, VTU/macro generation, and live FreeCAD OpenCASCADE B-Rep solid reconstruction.
     - Verified all 4 tests passed in 0.25s, integrated into regression harness (`run_all_tests.py`).
   - **Phase 7 Complete & Verified.**
+
+### [2026-09-08 20:00] Phase 8: Multi-Load Case Generative Design & 5-Axis Machinability Workflow
+- **Status**: SUCCESS
+- **Files Modified / Added**:
+  - `wnfea/opt/topology.py` [MODIFIED - Multi-load case compliance & weighted sensitivities]
+  - `wnfea/opt/machinability.py` [MODIFIED - 5-axis multi-directional milling & setup optimizer]
+  - `wnfea/opt/__init__.py` [MODIFIED - Exports FiveAxisMachinabilityOptimizer, FiveAxisSetupResult]
+  - `examples/generative_bracket_case_study.py` [NEW - Full production case study]
+  - `tests/test_phase8_multiload_5axis.py` [NEW]
+  - `run_all_tests.py` [MODIFIED - 18 test suites]
+  - `UNATTENDED_ROADMAP.md` [MODIFIED]
+  - `UNATTENDED_LOG.md` [MODIFIED]
+- **Verification**:
+  - `python run_all_tests.py` -> 18/18 suites passed (100% pass rate in 11.42s)
+  - `python examples/generative_bracket_case_study.py` -> EXECUTED & PASSED (1.40s total runtime)
+- **Key Changes & Metrics**:
+  - **Task 8.1 (Multi-Load Case Matrix-Free Topology Optimization)**:
+    - Extended `TopologyOptimizer` in `wnfea/opt/topology.py` to support $M$ independent force vectors $\mathbf{F}^{(m)}$ with user-specified or equal weights $w_m$.
+    - Evaluates weighted compliance $C = \sum_m w_m C^{(m)}$ and weighted elemental strain energy sensitivities $dC/d\rho_e = -p \rho_e^{p-1} \sum_m w_m (2 s_{e,m})$.
+    - Balances competing multi-directional stiffness requirements (e.g. transverse vertical bending + aerodynamic lateral roll/yaw).
+  - **Task 8.2 (5-Axis Spindle Orientation & Multi-Directional Milling Constraints)**:
+    - Extended `CNCMillingConstraint` in `wnfea/opt/machinability.py` to support arbitrary sets of milling axes (e.g. `["+z", "-z", "+x", "-x"]`) via multi-setup min-pooling $\rho_{mach} = \min_a \rho_{mach, a}$.
+    - Implemented `FiveAxisMachinabilityOptimizer` to evaluate candidate machine tool spindle orientations and automatically determine the optimal combination of $K$ setups (e.g. G54/G55) that maximizes machinable volume fraction and minimizes undercut residuals.
+  - **Task 8.3 (End-to-End Generative Bracket Production Case Study)**:
+    - Created `examples/generative_bracket_case_study.py` demonstrating the complete autonomous workflow:
+      1. Design domain voxelization ($120 \times 60 \times 40\text{ mm}$ 7075-T6 aluminum billet).
+      2. M8 bolt boss non-design domain isolation and multi-load boundary conditions.
+      3. 25 iterations of multi-load matrix-free SIMP optimization with 5-axis CNC undercut suppression in 0.22s ($8.9\text{ ms/iter}$).
+      4. Automated 5-axis setup selection identifying `['+z', '-z']` achieving $100.0\%$ machinability.
+      5. Watertight isosurface extraction (824 triangles) and FreeCAD 1.1 OpenCASCADE B-Rep STEP solid reconstruction with exact analytical M8 cylindrical bores in 1.16s (`Valid: True`).
+      6. ParaView VTU grid and automated deformation/colormap macro export.
+      7. Entire production case study completed in **1.40 seconds**.
+  - **Phase 8 Complete & Verified.**

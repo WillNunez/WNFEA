@@ -18,6 +18,8 @@ from .filters import (
 )
 from .machinability import (
     CNCMillingConstraint,
+    FiveAxisMachinabilityOptimizer,
+    FiveAxisSetupResult,
     apply_3axis_milling_filter,
 )
 
@@ -28,5 +30,7 @@ __all__ = [
     "SensitivityFilter",
     "HeavisideProjection",
     "CNCMillingConstraint",
+    "FiveAxisMachinabilityOptimizer",
+    "FiveAxisSetupResult",
     "apply_3axis_milling_filter",
 ]

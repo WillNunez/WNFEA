@@ -19,3 +19,4 @@ graphify-out/
 *.pvsm
 results/*.vtu
 results/*.pvsm
+output/

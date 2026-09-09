@@ -15,7 +15,7 @@ from __future__ import annotations
 
 import time
 from dataclasses import dataclass, field
-from typing import Optional, Sequence, List
+from typing import Optional, Sequence, List, Union
 import numpy as np
 
 from ..mesh.voxel_mesher import VoxelGrid
@@ -41,7 +41,7 @@ class TopologyConfig:
     damping_factor: float = 0.50           # OC damping coefficient eta
     enable_heaviside: bool = True          # Enable beta-continuation Heaviside projection
     heaviside_start_iter: int = 10         # Iteration to activate Heaviside projection
-    cnc_milling_axis: Optional[str] = None # "+z", "-z", "bi-z", or None
+    cnc_milling_axis: Optional[Union[str, Sequence[str]]] = None # e.g. "+z", "bi-z", or [\"+z\", \"-z\", \"+x\"]
     cnc_penalty_weight: float = 0.0        # Weight for undercut penalty
     verbose: bool = True
 
@@ -61,29 +61,52 @@ class OptimizationResult:
     volume_history: List[float]
     change_history: List[float]
     discreteness_index: float              # Fraction of elements within 5% of 0 or 1
+    load_case_compliances: Optional[List[float]] = None
+    final_displacement: Optional[np.ndarray] = None
 
 
 class TopologyOptimizer:
     """
-    In-the-loop Matrix-Free Topology Optimization Engine.
+    In-the-loop Matrix-Free Multi-Load Case Topology Optimization Engine.
     """
     def __init__(
         self,
         grid: VoxelGrid,
-        forces: np.ndarray,
+        forces: Union[np.ndarray, Sequence[np.ndarray]],
         fixed_dofs: Sequence[int],
         config: Optional[TopologyConfig] = None,
+        load_weights: Optional[Sequence[float]] = None,
         E: float = 2.1e11,
         nu: float = 0.3,
         passive_solid: Optional[Sequence[int]] = None,
         passive_void: Optional[Sequence[int]] = None,
     ):
         self.grid = grid
-        self.forces = np.asarray(forces, dtype=np.float64)
         self.fixed_dofs = list(fixed_dofs)
         self.config = config or TopologyConfig()
         self.E = float(E)
         self.nu = float(nu)
+
+        # Multi-load case processing
+        if isinstance(forces, np.ndarray) and forces.ndim == 1:
+            self.load_cases = [forces.astype(np.float64)]
+        elif isinstance(forces, np.ndarray) and forces.ndim == 2:
+            self.load_cases = [forces[i].astype(np.float64) for i in range(len(forces))]
+        else:
+            self.load_cases = [np.asarray(f, dtype=np.float64) for f in forces]
+
+        self.forces = self.load_cases[0]  # Backward compatibility property
+
+        n_lc = len(self.load_cases)
+        if load_weights is not None:
+            w = np.asarray(load_weights, dtype=np.float64)
+            if len(w) != n_lc:
+                raise ValueError(f"Length of load_weights ({len(w)}) must match number of load cases ({n_lc})")
+            if np.sum(w) <= 0:
+                raise ValueError("Sum of load_weights must be positive")
+            self.load_weights = w / np.sum(w)
+        else:
+            self.load_weights = np.full(n_lc, 1.0 / n_lc, dtype=np.float64)
 
         self.n_elements = grid.total_cells
         hx, hy, hz = grid.pitch
@@ -156,37 +179,43 @@ class TopologyOptimizer:
             # Clamp physical densities to prevent singular matrices
             self.grid.volume_fractions = np.clip(rho_phys, 1e-4, 1.0)
 
-            # B. State Solve via Matrix-Free PCG
-            u, elem_vm, pcg_iters = solve_voxel_linear_static(
-                self.grid,
-                self.forces,
-                self.fixed_dofs,
-                E=self.E,
-                nu=self.nu,
-                tol=1e-5,
-                verbose=False,
-            )
-
-            # C. Compliance & Elemental Strain Energy Evaluation
-            # u_e: (N, 24)
-            u_e = u[self.elem_dofs]
-            # k0_ue: (N, 24)
-            k0_ue = u_e @ self.k_0
-            # strain_energy_e: 0.5 * u_e^T * k_0 * u_e
-            strain_energy = 0.5 * np.sum(u_e * k0_ue, axis=1)  # (N,)
-
-            # Total Compliance C = F^T u = sum rho^p * 2 * strain_energy
+            # B. State Solve via Matrix-Free PCG across all load cases
             p = cfg.simp_penalty
-            comp_e = (rho_phys ** p) * (2.0 * strain_energy)
-            compliance = float(np.sum(comp_e))
-            curr_vol = float(np.mean(rho_phys))
+            weighted_strain_energy = np.zeros(self.n_elements, dtype=np.float64)
+            compliance = 0.0
+            lc_compliances = []
+            max_pcg_iters = 0
+            last_u = None
 
+            for f_case, w_case in zip(self.load_cases, self.load_weights):
+                u, elem_vm, pcg_iters = solve_voxel_linear_static(
+                    self.grid,
+                    f_case,
+                    self.fixed_dofs,
+                    E=self.E,
+                    nu=self.nu,
+                    tol=1e-5,
+                    verbose=False,
+                )
+                last_u = u
+                max_pcg_iters = max(max_pcg_iters, pcg_iters)
+
+                u_e = u[self.elem_dofs]
+                k0_ue = u_e @ self.k_0
+                se_case = 0.5 * np.sum(u_e * k0_ue, axis=1)  # (N,)
+                comp_case = float(np.sum((rho_phys ** p) * (2.0 * se_case)))
+                lc_compliances.append(comp_case)
+
+                weighted_strain_energy += w_case * se_case
+                compliance += w_case * comp_case
+
+            curr_vol = float(np.mean(rho_phys))
             compliance_hist.append(compliance)
             volume_hist.append(curr_vol)
 
-            # D. Adjoint Sensitivities
-            # dC/d(rho_phys) = - p * rho_phys^(p-1) * (2 * strain_energy)
-            dC_drho_phys = - p * (rho_phys ** (p - 1.0)) * (2.0 * strain_energy)
+            # D. Adjoint Sensitivities (weighted sum across load cases)
+            # dC/d(rho_phys) = - p * rho_phys^(p-1) * (2 * weighted_strain_energy)
+            dC_drho_phys = - p * (rho_phys ** (p - 1.0)) * (2.0 * weighted_strain_energy)
 
             # Chain rule through Heaviside and Spatial Filter
             # dC/d(rho_filtered) = dC/d(rho_phys) * d_proj
@@ -249,7 +278,7 @@ class TopologyOptimizer:
                     f"  Iter {it:2d}: Comp = {compliance:10.2f} J | "
                     f"Vol = {curr_vol*100:4.1f}% | "
                     f"Chg = {change:.4f} | "
-                    f"PCG = {pcg_iters:2d} | "
+                    f"PCG = {max_pcg_iters:2d} | "
                     f"Time = {t_it*1e3:5.1f} ms"
                 )
 
@@ -280,4 +309,6 @@ class TopologyOptimizer:
             volume_history=volume_hist,
             change_history=change_hist,
             discreteness_index=discreteness,
+            load_case_compliances=lc_compliances,
+            final_displacement=last_u,
         )

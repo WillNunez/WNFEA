@@ -29,6 +29,7 @@ TEST_SUITES = [
     ("Dual-Stage Voxel First-Pass & Sub-Modeling Pipeline", [sys.executable, os.path.join("tests", "test_dual_stage_pipeline.py")]),
     ("In-the-Loop Topology Optimization & Generative Design", [sys.executable, os.path.join("tests", "test_topology_optimization.py")]),
     ("FreeCAD B-Rep STEP Reconstruction & ParaView Pipeline", [sys.executable, os.path.join("tests", "test_cad_paraview_pipeline.py")]),
+    ("Multi-Load Topology & 5-Axis CNC Optimization", [sys.executable, os.path.join("tests", "test_phase8_multiload_5axis.py")]),
 ]
 
 

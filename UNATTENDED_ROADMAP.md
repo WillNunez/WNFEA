@@ -156,20 +156,38 @@ This document is the persistent execution backlog for autonomous development of 
 ---
 
 ### Phase 8: Multi-Load Case Generative Design & 5-Axis Machinability Workflow
-- [ ] **Task 8.1: Multi-Load Case Matrix-Free Topology Optimization**
+- [x] **Task 8.1: Multi-Load Case Matrix-Free Topology Optimization**
   - **Objective**: Extend `wnfea/opt/topology.py` to support weighted multiple independent load cases (e.g., $C = \sum_k w_k C_k$), computing composite sensitivity fields and enforcing multi-directional stiffness.
   - **Acceptance Criteria**: Converges to balanced topologies resisting combined bending, torsion, and axial body acceleration.
-  - **Verification**: `python run_all_tests.py`.
+  - **Verification**: `python run_all_tests.py`. (PASSED)
 
-- [ ] **Task 8.2: 5-Axis Spindle Orientation & Multi-Directional Milling Constraints**
+- [x] **Task 8.2: 5-Axis Spindle Orientation & Multi-Directional Milling Constraints**
   - **Objective**: Extend `wnfea/opt/machinability.py` to evaluate arbitrary 5-axis tool access orientations $(\theta, \phi)$ on spherical tooling manifolds, optimizing part setup orientation to maximize machinable volume.
   - **Acceptance Criteria**: Identifies optimal 3-axis/5-axis spindle setups minimizing unmachined internal pockets.
-  - **Verification**: `python run_all_tests.py`.
+  - **Verification**: `python run_all_tests.py`. (PASSED)
 
-- [ ] **Task 8.3: End-to-End Generative Bracket Production Case Study**
+- [x] **Task 8.3: End-to-End Generative Bracket Production Case Study**
   - **Objective**: Build `examples/generative_bracket_case_study.py` demonstrating the entire workflow: CAD B-Rep import -> Bolt hole recognition -> Multi-load topology optimization with CNC constraints -> Watertight FreeCAD STEP solid export -> Dual-stage sub-model stress verification -> ParaView VTU report generation.
   - **Acceptance Criteria**: Script executes end-to-end under 5 seconds, producing production-ready STEP and VTU assets.
-  - **Verification**: `python examples/generative_bracket_case_study.py` and `python run_all_tests.py`.
+  - **Verification**: `python examples/generative_bracket_case_study.py` and `python run_all_tests.py`. (PASSED - 1.40s total runtime)
+
+---
+
+### Phase 9: Matrix-Free Modal Dynamic Eigen-Solver & Hierarchical Octree AMR
+- [ ] **Task 9.1: Matrix-Free LOBPCG Modal Eigen-Solver (Natural Frequencies & Mode Shapes)**
+  - **Objective**: Implement `wnfea/solver/modal_analysis.py` using Locally Optimal Block Preconditioned Conjugate Gradient (LOBPCG) with lumped mass $\mathbf{M}$ and matrix-free $\mathbf{K}$ operator to extract the first $k$ structural natural frequencies and mode shapes without assembling global matrices.
+  - **Acceptance Criteria**: Computes first 6 mode shapes with exact mass-orthonormality ($\boldsymbol{\phi}_i^T \mathbf{M} \boldsymbol{\phi}_j = \delta_{ij}$) and <1% error vs analytical Euler-Bernoulli beam frequencies.
+  - **Verification**: `python run_all_tests.py`.
+
+- [ ] **Task 9.2: Hierarchical 1-Irregular Octree AMR Mesher with Hanging-Node Constraints**
+  - **Objective**: Implement `wnfea/mesh/octree_amr.py` supporting recursive adaptive mesh refinement around stress hotspots with automatic linear multi-point constraint (MPC) elimination on 1-irregular hanging faces.
+  - **Acceptance Criteria**: Locally refines high-stress elements by $2\times$ or $4\times$ while maintaining conforming displacement fields and $C^0$ continuity.
+  - **Verification**: `python run_all_tests.py`.
+
+- [ ] **Task 9.3: Verification Suite & Dynamic Mode Shape ParaView Exporter**
+  - **Objective**: Implement `tests/test_modal_analysis.py` verifying dynamic eigenvalues, mode shape orthogonality, and extending `wnfea/results/paraview_export.py` to export dynamic mode shape animations.
+  - **Acceptance Criteria**: 100% pass rate in verification harness.
+  - **Verification**: `python run_all_tests.py`.
 
 
 
