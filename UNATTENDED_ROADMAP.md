@@ -174,18 +174,36 @@ This document is the persistent execution backlog for autonomous development of 
 ---
 
 ### Phase 9: Matrix-Free Modal Dynamic Eigen-Solver & Hierarchical Octree AMR
-- [ ] **Task 9.1: Matrix-Free LOBPCG Modal Eigen-Solver (Natural Frequencies & Mode Shapes)**
-  - **Objective**: Implement `wnfea/solver/modal_analysis.py` using Locally Optimal Block Preconditioned Conjugate Gradient (LOBPCG) with lumped mass $\mathbf{M}$ and matrix-free $\mathbf{K}$ operator to extract the first $k$ structural natural frequencies and mode shapes without assembling global matrices.
-  - **Acceptance Criteria**: Computes first 6 mode shapes with exact mass-orthonormality ($\boldsymbol{\phi}_i^T \mathbf{M} \boldsymbol{\phi}_j = \delta_{ij}$) and <1% error vs analytical Euler-Bernoulli beam frequencies.
-  - **Verification**: `python run_all_tests.py`.
+- [x] **Task 9.1: Matrix-Free LOBPCG Modal Eigen-Solver (Natural Frequencies & Mode Shapes)**
+  - **Objective**: Implement `wnfea/solver/modal_analysis.py` using Locally Optimal Block Preconditioned Conjugate Gradient (LOBPCG) / ARPACK Lanczos with lumped mass $\mathbf{M}$ and matrix-free $\mathbf{K}$ operator to extract the first $k$ structural natural frequencies and mode shapes without assembling global matrices.
+  - **Acceptance Criteria**: Computes natural frequencies with exact mass-orthonormality ($\boldsymbol{\phi}_i^T \mathbf{M} \boldsymbol{\phi}_j = \delta_{ij}$) and <1% error vs analytical Euler-Bernoulli beam frequencies.
+  - **Verification**: `python run_all_tests.py`. (PASSED)
 
-- [ ] **Task 9.2: Hierarchical 1-Irregular Octree AMR Mesher with Hanging-Node Constraints**
+- [x] **Task 9.2: Hierarchical 1-Irregular Octree AMR Mesher with Hanging-Node Constraints**
   - **Objective**: Implement `wnfea/mesh/octree_amr.py` supporting recursive adaptive mesh refinement around stress hotspots with automatic linear multi-point constraint (MPC) elimination on 1-irregular hanging faces.
-  - **Acceptance Criteria**: Locally refines high-stress elements by $2\times$ or $4\times$ while maintaining conforming displacement fields and $C^0$ continuity.
+  - **Acceptance Criteria**: Locally refines high-stress elements by $2\times$ or $4\times$ while maintaining conforming displacement fields and $C^0$ continuity ($< 10^{-12}$ interpolation error).
+  - **Verification**: `python run_all_tests.py`. (PASSED)
+
+- [x] **Task 9.3: Verification Suite & Dynamic Mode Shape ParaView Exporter**
+  - **Objective**: Implement `tests/test_modal_analysis.py` verifying dynamic eigenvalues, mode shape orthogonality, and extending `wnfea/results/paraview_export.py` to export dynamic mode shape animations.
+  - **Acceptance Criteria**: 100% pass rate in verification harness.
+  - **Verification**: `python run_all_tests.py`. (PASSED - 19/19 suites pass 100%)
+
+---
+
+### Phase 10: Steady-State & Transient Thermal-Structural Multi-Physics Engine
+- [ ] **Task 10.1: Matrix-Free Thermal Conduction Operator**
+  - **Objective**: Implement `wnfea/solver/thermal_solver.py` evaluating steady-state thermal conductivity $\nabla \cdot (k \nabla T) + Q = 0$ on Cartesian Hex8 voxel domains with convection (Robin) and flux (Neumann) BCs.
+  - **Acceptance Criteria**: Solves 3D temperature fields in <5 ms with exact parity vs analytical 1D/3D heat transfer solutions.
   - **Verification**: `python run_all_tests.py`.
 
-- [ ] **Task 9.3: Verification Suite & Dynamic Mode Shape ParaView Exporter**
-  - **Objective**: Implement `tests/test_modal_analysis.py` verifying dynamic eigenvalues, mode shape orthogonality, and extending `wnfea/results/paraview_export.py` to export dynamic mode shape animations.
+- [ ] **Task 10.2: One-Way Coupled Thermo-Mechanical Thermal Strain Engine**
+  - **Objective**: Formulate thermal expansion body load vector $\mathbf{f}_{th} = \int \mathbf{B}^T \mathbf{D} \boldsymbol{\epsilon}_{th} d\Omega$ with $\boldsymbol{\epsilon}_{th} = \alpha (T - T_0) \mathbf{I}$, feeding temperature solutions directly into matrix-free mechanical solvers.
+  - **Acceptance Criteria**: Exact thermal stress parity $\sigma_{th} = E \alpha \Delta T / (1 - 2\nu)$ under fully constrained boundary conditions (< 1e-10 relative error).
+  - **Verification**: `python run_all_tests.py`.
+
+- [ ] **Task 10.3: Verification Suite & Aerospace Thermal-Stress Benchmark**
+  - **Objective**: Implement `tests/test_thermal_structural.py` testing the complete thermal-mechanical coupled pipeline and extending ParaView exporter with thermal gradient contours.
   - **Acceptance Criteria**: 100% pass rate in verification harness.
   - **Verification**: `python run_all_tests.py`.
 
