@@ -192,20 +192,20 @@ This document is the persistent execution backlog for autonomous development of 
 ---
 
 ### Phase 10: Steady-State & Transient Thermal-Structural Multi-Physics Engine
-- [ ] **Task 10.1: Matrix-Free Thermal Conduction Operator**
+- [x] **Task 10.1: Matrix-Free Thermal Conduction Operator**
   - **Objective**: Implement `wnfea/solver/thermal_solver.py` evaluating steady-state thermal conductivity $\nabla \cdot (k \nabla T) + Q = 0$ on Cartesian Hex8 voxel domains with convection (Robin) and flux (Neumann) BCs.
   - **Acceptance Criteria**: Solves 3D temperature fields in <5 ms with exact parity vs analytical 1D/3D heat transfer solutions.
-  - **Verification**: `python run_all_tests.py`.
+  - **Verification**: `python run_all_tests.py`. (PASSED - <1 ms solve, exact 1D/parabolic parity < 1e-10 error)
 
-- [ ] **Task 10.2: One-Way Coupled Thermo-Mechanical Thermal Strain Engine**
+- [x] **Task 10.2: One-Way Coupled Thermo-Mechanical Thermal Strain Engine**
   - **Objective**: Formulate thermal expansion body load vector $\mathbf{f}_{th} = \int \mathbf{B}^T \mathbf{D} \boldsymbol{\epsilon}_{th} d\Omega$ with $\boldsymbol{\epsilon}_{th} = \alpha (T - T_0) \mathbf{I}$, feeding temperature solutions directly into matrix-free mechanical solvers.
   - **Acceptance Criteria**: Exact thermal stress parity $\sigma_{th} = E \alpha \Delta T / (1 - 2\nu)$ under fully constrained boundary conditions (< 1e-10 relative error).
-  - **Verification**: `python run_all_tests.py`.
+  - **Verification**: `python run_all_tests.py`. (PASSED - exact hydrostatic stress parity 0.0 rel error, zero-stress unconstrained expansion)
 
-- [ ] **Task 10.3: Verification Suite & Aerospace Thermal-Stress Benchmark**
+- [x] **Task 10.3: Verification Suite & Aerospace Thermal-Stress Benchmark**
   - **Objective**: Implement `tests/test_thermal_structural.py` testing the complete thermal-mechanical coupled pipeline and extending ParaView exporter with thermal gradient contours.
   - **Acceptance Criteria**: 100% pass rate in verification harness.
-  - **Verification**: `python run_all_tests.py`.
+  - **Verification**: `python run_all_tests.py`. (PASSED - 20/20 test suites pass 100% in 13.99s)
 
 
 

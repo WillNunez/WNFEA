@@ -345,3 +345,39 @@ This journal records all autonomous progress, test outcomes, commit hashes, and 
     - Exports multi-mode displacement vector fields (`Mode_1_50.0Hz`, `Mode_2_...`) and generates ready-to-run ParaView macro scripts configured for automatic `WarpByVector` modal vibration animations.
     - Verified all tests in `tests/test_modal_analysis.py` pass 100% in 0.20s.
   - **Phase 9 Complete & Verified.**
+
+### [2026-09-09 05:00] Phase 10: Steady-State & Transient Thermal-Structural Multi-Physics Engine
+- **Status**: SUCCESS
+- **Files Modified / Added**:
+  - `wnfea/solver/thermal_solver.py` [NEW - Matrix-free thermal conductivity & coupled thermo-mechanical expansion]
+  - `wnfea/solver/__init__.py` [MODIFIED - Export thermal solver classes and functions]
+  - `wnfea/results/paraview_export.py` [MODIFIED - Support temperature fields and heat flux vectors in VTU]
+  - `tests/test_thermal_structural.py` [NEW - 8 comprehensive multi-physics tests]
+  - `run_all_tests.py` [MODIFIED - 20 test suites]
+  - `UNATTENDED_ROADMAP.md` [MODIFIED - Phase 10 completed]
+  - `UNATTENDED_LOG.md` [MODIFIED]
+- **Verification**:
+  - `python run_all_tests.py` -> 20/20 suites passed (100% pass rate in 13.99s)
+  - `python tests/test_thermal_structural.py` -> 8/8 tests passed in 0.011s (11 ms)
+- **Key Changes & Metrics**:
+  - **Task 10.1 (Matrix-Free Thermal Conduction Operator)**:
+    - Implemented `compute_hex8_thermal_reference` and `MatrixFreeHex8ThermalOperator` in `wnfea/solver/thermal_solver.py`.
+    - Exploits uniform Cartesian stencil property: single $8 \times 8$ analytical reference conductivity matrix $\mathbf{k}_{0, th}$ shared across all cells with $O(1)$ memory.
+    - Verified exact conservation of energy: row sums of $\mathbf{k}_{0, th} = 0$, exactly one zero eigenvalue (rigid thermal shift), and 7 positive eigenvalues.
+    - Implemented `solve_steady_state_thermal` with Point Jacobi PCG handling Dirichlet (fixed temperatures), Neumann (point and volumetric heat fluxes), and Robin (surface convection $q = h_{conv} (T - T_\infty)$) boundary conditions.
+    - Verified 1D linear temperature distribution error $< 10^{-10}$ and parabolic volumetric heat generation error $< 10^{-10}$ relative error.
+    - Implemented `solve_transient_thermal` using unconditionally stable implicit backward Euler with lumped nodal heat capacitance $C_{node} = \rho c_p V_e / 8$.
+  - **Task 10.2 (One-Way Coupled Thermo-Mechanical Thermal Strain Engine)**:
+    - Formulated the exact equivalent nodal thermal expansion body load vector:
+      $\mathbf{f}_{th} = \sum_e \int_{\Omega_e} \mathbf{B}^T \mathbf{D} \boldsymbol{\epsilon}_{th} d\Omega$
+      using the precomputed $24 \times 8$ reference coupling matrix $\mathbf{H}_{th}$ with $O(1)$ evaluation:
+      $\mathbf{f}_{e, th} = \frac{E \alpha_{cte}}{1 - 2\nu} \alpha_e^p (\mathbf{H}_{th} \Delta \mathbf{T}_e)$.
+    - Proved exact analytical parity:
+      - Fully constrained thermal expansion yields exact theoretical hydrostatic stress $\sigma_{xx} = \sigma_{yy} = \sigma_{zz} = -\frac{E \alpha_{cte} \Delta T}{1 - 2\nu}$ with **0.0 relative error** and zero shear/von Mises stress.
+      - Free unconstrained thermal expansion yields exact corner displacement $\Delta L = \alpha_{cte} \Delta T L$ and zero residual stress ($< 10^{-15}$ relative error with PCG).
+    - Implemented `solve_thermo_mechanical` convenience pipeline combining thermal conduction, thermal expansion load transfer, and structural equilibrium.
+  - **Task 10.3 (Verification Suite & Multi-Physics ParaView VTU Export)**:
+    - Extended `export_voxel_grid_vtu` in `wnfea/results/paraview_export.py` to serialize PointData `Temperature` and CellData `HeatFlux` vector fields.
+    - Built comprehensive test suite in `tests/test_thermal_structural.py` covering all 8 analytical benchmarks.
+    - Registered suite in `run_all_tests.py`, maintaining 100% pass rate across all 20 regression suites in 13.99s.
+  - **Phase 10 Complete & Verified.**

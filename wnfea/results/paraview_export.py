@@ -30,6 +30,8 @@ def export_voxel_grid_vtu(
     displacements: Optional[np.ndarray] = None,
     densities: Optional[np.ndarray] = None,
     von_mises: Optional[np.ndarray] = None,
+    temperatures: Optional[np.ndarray] = None,
+    heat_fluxes: Optional[np.ndarray] = None,
     threshold: float = 0.05,
 ) -> str:
     """
@@ -41,6 +43,8 @@ def export_voxel_grid_vtu(
         displacements: Optional (N_nodes * 3,) or (N_nodes, 3) nodal displacements.
         densities: Optional (N_cells,) physical density array.
         von_mises: Optional (N_cells,) von Mises stress array.
+        temperatures: Optional (N_nodes,) nodal temperature field.
+        heat_fluxes: Optional (N_cells, 3) centroidal heat flux vectors.
         threshold: Minimum density threshold to filter void cells (default: 0.05).
 
     Returns:
@@ -75,7 +79,7 @@ def export_voxel_grid_vtu(
     # 3. Points array
     points_str = " ".join(f"{pt[0]:.6e} {pt[1]:.6e} {pt[2]:.6e}" for pt in compact_nodes)
 
-    # 4. Point Data (Displacements)
+    # 4. Point Data (Displacements and Temperatures)
     point_data_xml = []
     if displacements is not None:
         u_arr = np.asarray(displacements, dtype=np.float64)
@@ -96,7 +100,14 @@ def export_voxel_grid_vtu(
             f'<DataArray type="Float64" Name="Displacement_Magnitude" NumberOfComponents="1" format="ascii">\n{mag_str}\n</DataArray>'
         )
 
-    # 5. Cell Data (Density and VonMisesStress)
+    if temperatures is not None:
+        t_arr = np.asarray(temperatures, dtype=np.float64)[unique_nodes]
+        t_str = " ".join(f"{t:.6e}" for t in t_arr)
+        point_data_xml.append(
+            f'<DataArray type="Float64" Name="Temperature" NumberOfComponents="1" format="ascii">\n{t_str}\n</DataArray>'
+        )
+
+    # 5. Cell Data (Density, VonMisesStress, HeatFlux)
     cell_data_xml = []
     if densities is not None:
         dens_str = " ".join(f"{float(dens[cid]):.4f}" for cid in active_cell_ids)
@@ -108,6 +119,18 @@ def export_voxel_grid_vtu(
         vm_str = " ".join(f"{float(von_mises[cid]):.6e}" for cid in active_cell_ids)
         cell_data_xml.append(
             f'<DataArray type="Float64" Name="VonMisesStress" NumberOfComponents="1" format="ascii">\n{vm_str}\n</DataArray>'
+        )
+
+    if heat_fluxes is not None:
+        q_arr = np.asarray(heat_fluxes, dtype=np.float64)[active_cell_ids]
+        q_str = " ".join(f"{q[0]:.6e} {q[1]:.6e} {q[2]:.6e}" for q in q_arr)
+        q_mag = np.linalg.norm(q_arr, axis=1)
+        q_mag_str = " ".join(f"{mag:.6e}" for mag in q_mag)
+        cell_data_xml.append(
+            f'<DataArray type="Float64" Name="HeatFlux" NumberOfComponents="3" format="ascii">\n{q_str}\n</DataArray>'
+        )
+        cell_data_xml.append(
+            f'<DataArray type="Float64" Name="HeatFlux_Magnitude" NumberOfComponents="1" format="ascii">\n{q_mag_str}\n</DataArray>'
         )
 
     # 6. Assemble XML content
