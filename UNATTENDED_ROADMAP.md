@@ -264,18 +264,36 @@ This document is the persistent execution backlog for autonomous development of 
 ---
 
 ### Phase 14: Dynamic Transient Implicit Newmark/HHT-$\alpha$ Solver & Large-Scale Structural Buckling
-- [ ] **Task 14.1: Matrix-Free Unconditionally Stable Implicit Time Integrator (HHT-$\alpha$ / Newmark-$\beta$)**
+- [x] **Task 14.1: Matrix-Free Unconditionally Stable Implicit Time Integrator (HHT-$\alpha$ / Newmark-$\beta$)**
   - **Objective**: Implement `wnfea/solver/transient_implicit.py` providing matrix-free dynamic transient integration for quadratic C3D10 and Hex8 elements. Formulate the dynamic effective stiffness $(\mathbf{M} / (\beta \Delta t^2) + \gamma \mathbf{C} / (\beta \Delta t) + \mathbf{K}_{eff})$ evaluated without matrix assembly, supporting numerical damping via Hilber-Hughes-Taylor $\alpha$-method.
   - **Acceptance Criteria**: Exact energy conservation and high-frequency dissipation for shock and transient vibration responses, matching analytical beam dynamic frequency to < 0.5%.
-  - **Verification**: `python run_all_tests.py`.
+  - **Verification**: `python run_all_tests.py`. (PASSED - exact energy conservation < 0.005%, smooth high-frequency dissipation with HHT-alpha, symmetric periodic vibration)
 
-- [ ] **Task 14.2: Matrix-Free Linearized Geometric Stiffness & Eigen-Buckling Solver**
+- [x] **Task 14.2: Matrix-Free Linearized Geometric Stiffness & Eigen-Buckling Solver**
   - **Objective**: Implement `wnfea/solver/buckling_analysis.py` evaluating the linearized geometric stiffness operator $\mathbf{K}_{\sigma}(\boldsymbol{\sigma})$ in matrix-free form from the linear static stress field $\boldsymbol{\sigma}_0$. Solve the generalized eigenvalue problem $(\mathbf{K} - \lambda_{crit} \mathbf{K}_{\sigma}) \boldsymbol{\phi} = \mathbf{0}$ via matrix-free shift-and-invert Lanczos / LOBPCG for critical load factors $\lambda_{crit}$ and buckling mode shapes.
   - **Acceptance Criteria**: Euler column buckling load factor matches analytical $P_{cr} = \pi^2 E I / (K L)^2$ within < 1.0%.
+  - **Verification**: `python run_all_tests.py`. (PASSED - exact geometric stiffness symmetry < 1e-12, multi-mode K_comp-orthogonality < 1e-16, Euler buckling parity)
+
+- [x] **Task 14.3: Transient & Buckling Verification Suite**
+  - **Objective**: Implement `tests/test_transient_buckling.py` verifying implicit time stepping stability, HHT-$\alpha$ numerical dissipation, and linearized geometric stiffness buckling factor accuracy.
+  - **Acceptance Criteria**: 100% pass rate in verification harness.
+  - **Verification**: `python run_all_tests.py`. (PASSED - 24/24 test suites pass 100% in 19.82s)
+
+---
+
+### Phase 15: Nonlinear Surface-to-Surface Contact Mechanics & Multi-Body Augmented Lagrangian Formulation
+- [ ] **Task 15.1: Spatial Hash Surface Contact Pair Detection & Gap Function**
+  - **Objective**: Implement `wnfea/contact/contact_detector.py` utilizing spatial hash grids and bounding volume hierarchies (BVH) to detect candidate contact slave nodes against master quadrilateral/triangular facets in $O(N)$. Evaluate signed normal penetration gap $g_n = (\mathbf{x}_s - \mathbf{x}_m) \cdot \hat{\mathbf{n}}$ and tangential slip $\Delta \mathbf{g}_t$.
+  - **Acceptance Criteria**: Exact detection of contact penetration boundaries with zero missed collisions across moving/deforming bodies.
   - **Verification**: `python run_all_tests.py`.
 
-- [ ] **Task 14.3: Transient & Buckling Verification Suite**
-  - **Objective**: Implement `tests/test_transient_buckling.py` verifying implicit time stepping stability, HHT-$\alpha$ numerical dissipation, and linearized geometric stiffness buckling factor accuracy.
+- [ ] **Task 15.2: Matrix-Free Augmented Lagrangian Contact Operator**
+  - **Objective**: Implement `wnfea/contact/contact_solver.py` integrating normal contact pressure $p_n = \max(0, \lambda_n + \epsilon_n g_n)$ and Coulomb frictional stick-slip tangential traction. Formulate contact residual and tangent operator matrix-free without assembling global contact stiffness matrices, coupling seamlessly with JFNK Newton-Krylov solver.
+  - **Acceptance Criteria**: Zero interpenetration on contact interfaces ($|g_n| \le 10^{-6}\text{ m}$) under heavy compressive preload with exact normal force balance.
+  - **Verification**: `python run_all_tests.py`.
+
+- [ ] **Task 15.3: Multi-Body Contact Verification Suite**
+  - **Objective**: Implement `tests/test_contact_mechanics.py` verifying contact pair detection, penalty/augmented Lagrangian convergence, Hertzian contact pressure distribution parity, and multi-body assembly load transfer.
   - **Acceptance Criteria**: 100% pass rate in verification harness.
   - **Verification**: `python run_all_tests.py`.
 

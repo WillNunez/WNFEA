@@ -45,6 +45,19 @@ from .hierarchical_warmstart import (
     compute_hierarchical_warmstart,
 )
 
+from .transient_implicit import (
+    TransientHistory,
+    MatrixFreeEffectiveDynamicOperator,
+    solve_pcg_transient,
+    solve_transient_implicit,
+)
+
+from .buckling_analysis import (
+    BucklingResult,
+    MatrixFreeGeometricStiffnessOperator,
+    solve_linear_buckling,
+)
+
 __all__ = [
     "BeamSolver",
     "SolverError",
@@ -81,5 +94,12 @@ __all__ = [
     "project_voxel_to_fine_mesh",
     "project_amr_to_fine_mesh",
     "compute_hierarchical_warmstart",
+    "TransientHistory",
+    "MatrixFreeEffectiveDynamicOperator",
+    "solve_pcg_transient",
+    "solve_transient_implicit",
+    "BucklingResult",
+    "MatrixFreeGeometricStiffnessOperator",
+    "solve_linear_buckling",
 ]
 

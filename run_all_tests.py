@@ -35,6 +35,7 @@ TEST_SUITES = [
     ("CAD-Conforming AMR Snapping & Stress Optimization", [sys.executable, os.path.join("tests", "test_stress_constrained_opt.py")]),
     ("Multi-Fidelity Voxel-to-AMR Iterative Adaptive Engine", [sys.executable, os.path.join("tests", "test_adaptive_subdomain_pipeline.py")]),
     ("Out-of-Core Streaming & Hierarchical Warm-Start", [sys.executable, os.path.join("tests", "test_outofcore_streaming_warmstart.py")]),
+    ("Dynamic Transient Implicit Solver & Linearized Buckling", [sys.executable, os.path.join("tests", "test_transient_buckling.py")]),
 ]
 
 

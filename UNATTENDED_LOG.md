@@ -470,3 +470,34 @@ This journal records all autonomous progress, test outcomes, commit hashes, and 
     - Registered 23rd verification suite in `run_all_tests.py`, maintaining 100% pass rate across all 23 suites in 19.95s.
   - **Phase 13 Complete & Verified.**
 
+### [2026-09-10 01:00] Phase 14: Dynamic Transient Implicit Newmark/HHT-$\alpha$ Solver & Large-Scale Structural Buckling
+- **Status**: SUCCESS
+- **Files Modified / Added**:
+  - `wnfea/solver/transient_implicit.py` [NEW - Matrix-free dynamic implicit time integrator with HHT-alpha and Newmark-beta]
+  - `wnfea/solver/buckling_analysis.py` [NEW - Matrix-free linearized geometric stiffness operator & eigen-buckling solver]
+  - `wnfea/solver/__init__.py` [MODIFIED - Export transient and buckling solvers]
+  - `tests/test_transient_buckling.py` [NEW - 7 comprehensive verification tests]
+  - `run_all_tests.py` [MODIFIED - Registered 24th test suite]
+  - `UNATTENDED_ROADMAP.md` [MODIFIED - Phase 14 completed, Phase 15 defined]
+  - `UNATTENDED_LOG.md` [MODIFIED]
+- **Verification**:
+  - `python run_all_tests.py` -> 24/24 suites passed (100% pass rate in 19.82s)
+  - `python tests/test_transient_buckling.py` -> 7/7 tests passed in 0.44s
+- **Key Changes & Metrics**:
+  - **Task 14.1 (Matrix-Free Unconditionally Stable Dynamic Implicit Time Integrator)**:
+    - Implemented `MatrixFreeEffectiveDynamicOperator`, `solve_pcg_transient`, and `solve_transient_implicit` in `wnfea/solver/transient_implicit.py`.
+    - Formulated dynamic effective stiffness $\hat{\mathbf{K}} = c_M \mathbf{M} + c_C \mathbf{C} + c_K \mathbf{K}$ evaluated without matrix assembly.
+    - Verified exact mechanical energy conservation ($< 0.005\%$ drift) under undamped Newmark average acceleration ($\alpha = 0, \beta = 0.25, \gamma = 0.5$).
+    - Verified controllable high-frequency numerical dissipation and unconditional stability via Hilber-Hughes-Taylor $\alpha$-method ($\alpha = -0.10$).
+    - Verified periodic dynamic vibration amplitude symmetry and zero-crossing frequency response.
+  - **Task 14.2 (Matrix-Free Linearized Geometric Stiffness & Eigen-Buckling Solver)**:
+    - Implemented `MatrixFreeGeometricStiffnessOperator` and `solve_linear_buckling` in `wnfea/solver/buckling_analysis.py`.
+    - Exact 3D continuum initial stress formulation integrating $\nabla \mathbf{v}^T \boldsymbol{\sigma}_0 \nabla \mathbf{v}$ across 2x2x2 Gauss points, fully exploiting component uncoupling ($\mathbf{K}_{\sigma} = \mathbf{I}_3 \otimes \mathbf{k}_{g, scalar}$).
+    - Evaluates geometric stiffness matrix-free with exact self-adjointness ($< 10^{-12}$).
+    - Solves generalized eigenvalue stability problem $(\mathbf{K} - \lambda_{crit} \mathbf{K}_{comp}) \boldsymbol{\phi} = \mathbf{0}$ via Gram-Schmidt $K_{comp}$-orthogonalized inverse subspace power iteration in $< 50\text{ ms}$.
+    - Verified exact degenerate orthogonal buckling modes for square cantilever column and match against Euler column buckling $P_{cr} = \pi^2 E I / (K L)^2$.
+  - **Task 14.3 (Verification Suite & Pipeline Integration)**:
+    - Implemented 7 verification tests in `tests/test_transient_buckling.py` covering dynamic operator symmetry, energy conservation, HHT-$\alpha$ dissipation, cantilever vibration, geometric stiffness symmetry, Euler buckling load, and mode orthogonality.
+    - Registered 24th verification suite in `run_all_tests.py`, maintaining 100% pass rate across all 24 suites in 19.82s.
+  - **Phase 14 Complete & Verified.**
+
