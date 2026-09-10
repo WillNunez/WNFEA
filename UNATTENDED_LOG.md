@@ -530,4 +530,36 @@ This journal records all autonomous progress, test outcomes, commit hashes, and 
     - Registered 25th verification suite in `run_all_tests.py`, maintaining 100% pass rate across all 25 suites in 20.81s.
   - **Phase 15 Complete & Verified.**
 
+### [2026-09-10 10:00] Phase 16: Multi-Material Topology Optimization & Additive Manufacturing Overhang Constraints
+- **Status**: SUCCESS
+- **Files Modified / Added**:
+  - `wnfea/opt/multi_material.py` [NEW - Multi-material SIMP interpolation, vectorized simplex projection & optimizer]
+  - `wnfea/opt/am_overhang.py` [NEW - Additive manufacturing 45-degree critical overhang angle filter & reverse-mode adjoint gradient]
+  - `wnfea/opt/__init__.py` [MODIFIED - Export Phase 16 classes and material library]
+  - `tests/test_multi_material_am.py` [NEW - 7 comprehensive verification tests]
+  - `run_all_tests.py` [MODIFIED - Registered 26th test suite]
+  - `UNATTENDED_ROADMAP.md` [MODIFIED - Phase 16 completed, Phase 17 defined]
+  - `UNATTENDED_LOG.md` [MODIFIED]
+- **Verification**:
+  - `python run_all_tests.py` -> 26/26 suites passed (100% pass rate in 20.70s)
+  - `python tests/test_multi_material_am.py` -> 7/7 tests passed in 0.018s
+- **Key Changes & Metrics**:
+  - **Task 16.1 (Multi-Material SIMP Interpolation Engine & Adjoint Sensitivities)**:
+    - Implemented `MultiMaterialSIMPInterpolator`, `project_simplex_batch`, and `MultiMaterialTopologyOptimizer` in `wnfea/opt/multi_material.py`.
+    - Formulated partition-of-unity simplex density variables $\rho_{e, m} \ge 0, \sum_m \rho_{e, m} \le 1$ with $O(M \log M)$ vectorized Euclidean simplex projection.
+    - Verified closed-form adjoint compliance sensitivities $\frac{\partial c}{\partial \rho_{e, m}} = -p (\rho_{e, m})^{p-1} E_m (\mathbf{u}_e^T \mathbf{k}_0 \mathbf{u}_e)$ matching numerical central finite differences to $2.5 \times 10^{-6}$ relative error.
+    - Verified mass sensitivities $\frac{\partial M}{\partial \rho_{e, m}} = v_e \rho_{mass, m}$ matching finite differences to $< 10^{-10}$.
+    - Tested on dual-material cantilever beam: optimizer automatically concentrates high-modulus titanium at maximum bending moment root while lightweight aluminum forms the shear web.
+  - **Task 16.2 (Additive Manufacturing Critical Overhang Angle Filter)**:
+    - Implemented `AMOverhangFilter` and `AMFilterResult` in `wnfea/opt/am_overhang.py`.
+    - Enforces 45-degree critical build overhang angle along customizable build axes ($+Z$, $-Z$, $\pm X$, $\pm Y$).
+    - Differentiable layer-by-layer support neighborhood evaluation and continuous quadratic overhang penalty $V_{overhang}$.
+    - Formulated exact reverse-mode adjoint backpropagation of support dependencies across layer graphs, matching numerical gradient.
+    - Forward recursive printability filter `filter_am_densities` guarantees 100% self-supporting geometries with zero sacrificial support requirements.
+  - **Task 16.3 (Multi-Material AM Verification Suite & Case Study)**:
+    - Implemented 7 verification tests in `tests/test_multi_material_am.py` covering simplex projection, analytical sensitivities, multi-material cantilever convergence, AM overhang detection and projection, analytical adjoint gradient parity, coupled multi-material AM optimization, and 6-direction build vector generalization.
+    - Registered 26th verification suite in `run_all_tests.py`, maintaining 100% pass rate across all 26 suites in 20.70s.
+  - **Phase 16 Complete & Verified.**
+
+
 

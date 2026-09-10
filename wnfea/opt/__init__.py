@@ -30,6 +30,24 @@ from .stress_opt import (
     StressAggregationType,
 )
 
+from .multi_material import (
+    MaterialProperty,
+    MultiMaterialConfig,
+    MultiMaterialResult,
+    MultiMaterialSIMPInterpolator,
+    MultiMaterialTopologyOptimizer,
+    project_simplex_batch,
+    ALUMINUM_6061,
+    TITANIUM_TI6AL4V,
+    STEEL_STRUCTURAL,
+    CARBON_PEEK,
+)
+
+from .am_overhang import (
+    AMOverhangFilter,
+    AMFilterResult,
+)
+
 __all__ = [
     "TopologyOptimizer",
     "TopologyConfig",
@@ -44,4 +62,17 @@ __all__ = [
     "StressConstraintConfig",
     "StressOptResult",
     "StressAggregationType",
+    "MaterialProperty",
+    "MultiMaterialConfig",
+    "MultiMaterialResult",
+    "MultiMaterialSIMPInterpolator",
+    "MultiMaterialTopologyOptimizer",
+    "project_simplex_batch",
+    "ALUMINUM_6061",
+    "TITANIUM_TI6AL4V",
+    "STEEL_STRUCTURAL",
+    "CARBON_PEEK",
+    "AMOverhangFilter",
+    "AMFilterResult",
 ]
+

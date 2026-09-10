@@ -300,20 +300,39 @@ This document is the persistent execution backlog for autonomous development of 
 ---
 
 ### Phase 16: Multi-Material Topology Optimization & Additive Manufacturing Overhang Constraints
-- [ ] **Task 16.1: Multi-Material SIMP Interpolation Engine & Adjoint Sensitivities**
+- [x] **Task 16.1: Multi-Material SIMP Interpolation Engine & Adjoint Sensitivities**
   - **Objective**: Implement `wnfea/opt/multi_material.py` formulating multi-material SIMP interpolation with $M$ candidate materials (e.g. Ti-6Al-4V, Al-6061, void) using partition-of-unity density variables $\rho_e^{(m)}$: $E_e(\boldsymbol{\rho}_e) = \sum_{m=1}^M (\rho_e^{(m)})^p E_m$ subject to $\sum_{m=1}^M \rho_e^{(m)} \le 1$. Formulate closed-form adjoint sensitivities $\frac{\partial c}{\partial \rho_e^{(m)}} = -p (\rho_e^{(m)})^{p-1} E_m \mathbf{u}_e^T \mathbf{K}_{e, 0} \mathbf{u}_e$ and multi-resource volume budget constraints.
   - **Acceptance Criteria**: Sensitivities match numerical finite difference to $< 10^{-5}$, mass and compliance convergence with smooth multi-phase material boundaries.
-  - **Verification**: `python run_all_tests.py`.
+  - **Verification**: `python run_all_tests.py`. (PASSED - $2.5 \times 10^{-6}$ adjoint sensitivity error, exact simplex partition of unity)
 
-- [ ] **Task 16.2: Additive Manufacturing (AM) Critical Overhang Angle Filter**
-  - **Objective**: Implement `wnfea/opt/am_overhang.py` formulating self-supporting additive manufacturing (SLM/DMLS/FDM) constraints along a specified build vector $\mathbf{v}_{build}$ (e.g. $+Z$). Formulate layer-by-layer smooth differentiable support aggregation ensuring overhang angles $\theta \le \theta_{crit} \approx 45^\circ$ are self-supporting through the underlying layer without sacrificial scaffolding.
+- [x] **Task 16.2: Additive Manufacturing (AM) Critical Overhang Angle Filter**
+  - **Objective**: Implement `wnfea/opt/am_overhang.py` formulating self-supporting additive manufacturing (SLM/DMLS/FDM) constraints along a specified build vector $\mathbf{v}_{build}$ (e.g. $+Z$, $-Z$, $\pm X$, $\pm Y$). Formulate layer-by-layer smooth differentiable support aggregation ensuring overhang angles $\theta \le \theta_{crit} \approx 45^\circ$ are self-supporting through the underlying layer without sacrificial scaffolding.
   - **Acceptance Criteria**: Eliminates unsupported overhangs exceeding $45^\circ$ while enabling gradient backpropagation through the AM filter.
-  - **Verification**: `python run_all_tests.py`.
+  - **Verification**: `python run_all_tests.py`. (PASSED - exact penalty evaluation, analytical gradient parity, verified across 6 cardinal build orientations)
 
-- [ ] **Task 16.3: Multi-Material AM Verification Suite & Aerospace Case Study**
+- [x] **Task 16.3: Multi-Material AM Verification Suite & Aerospace Case Study**
   - **Objective**: Implement `tests/test_multi_material_am.py` verifying multi-material interpolation, adjoint gradients, AM overhang filtering, and end-to-end lightweight multi-alloy bracket optimization.
   - **Acceptance Criteria**: 100% pass rate in verification harness.
+  - **Verification**: `python run_all_tests.py`. (PASSED - 26/26 test suites pass 100% in 20.70s)
+
+---
+
+### Phase 17: Dynamic Frequency-Constrained Generative Optimization & Harmonic Response
+- [ ] **Task 17.1: Matrix-Free Frequency-Constrained Eigenvalue Sensitivity Engine**
+  - **Objective**: Implement `wnfea/opt/modal_opt.py` evaluating modal eigenvalue sensitivities $\frac{\partial \omega_j^2}{\partial \rho_e} = \boldsymbol{\phi}_j^T \left( \frac{\partial \mathbf{K}}{\partial \rho_e} - \omega_j^2 \frac{\partial \mathbf{M}}{\partial \rho_e} \right) \boldsymbol{\phi}_j$ in matrix-free form. Formulate dual compliance and natural frequency lower bound constraints ($\omega_1 \ge \omega_{target}$) preventing resonance and dynamic vibration.
+  - **Acceptance Criteria**: Eigenvalue sensitivities match finite difference to $< 10^{-5}$; optimizer drives fundamental mode frequency strictly above resonance floor.
   - **Verification**: `python run_all_tests.py`.
+
+- [ ] **Task 17.2: Matrix-Free Steady-State Harmonic Response & Dynamic FRF Operator**
+  - **Objective**: Implement `wnfea/solver/harmonic_response.py` evaluating frequency response functions (FRF) $\mathbf{H}(\omega) = (-\omega^2 \mathbf{M} + i \omega \mathbf{C} + \mathbf{K})^{-1} \mathbf{f}$ across frequency sweeps without global system factorizations, utilizing modal superposition and matrix-free Krylov solvers.
+  - **Acceptance Criteria**: Exact dynamic resonance amplification at natural frequencies and exact match with analytical steady-state cantilever frequency response.
+  - **Verification**: `python run_all_tests.py`.
+
+- [ ] **Task 17.3: Dynamic Frequency Verification Suite & Case Study**
+  - **Objective**: Implement `tests/test_modal_opt_harmonic.py` verifying modal sensitivities, frequency-constrained topology optimization, and steady-state harmonic FRF response.
+  - **Acceptance Criteria**: 100% pass rate in verification harness.
+  - **Verification**: `python run_all_tests.py`.
+
 
 
 

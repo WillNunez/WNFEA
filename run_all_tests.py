@@ -37,6 +37,7 @@ TEST_SUITES = [
     ("Out-of-Core Streaming & Hierarchical Warm-Start", [sys.executable, os.path.join("tests", "test_outofcore_streaming_warmstart.py")]),
     ("Dynamic Transient Implicit Solver & Linearized Buckling", [sys.executable, os.path.join("tests", "test_transient_buckling.py")]),
     ("Nonlinear Surface Contact Mechanics & Assembly", [sys.executable, os.path.join("tests", "test_contact_mechanics.py")]),
+    ("Multi-Material Optimization & Additive Manufacturing", [sys.executable, os.path.join("tests", "test_multi_material_am.py")]),
 ]
 
 
