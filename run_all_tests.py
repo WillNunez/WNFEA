@@ -38,6 +38,7 @@ TEST_SUITES = [
     ("Dynamic Transient Implicit Solver & Linearized Buckling", [sys.executable, os.path.join("tests", "test_transient_buckling.py")]),
     ("Nonlinear Surface Contact Mechanics & Assembly", [sys.executable, os.path.join("tests", "test_contact_mechanics.py")]),
     ("Multi-Material Optimization & Additive Manufacturing", [sys.executable, os.path.join("tests", "test_multi_material_am.py")]),
+    ("Dynamic Frequency Optimization & Harmonic FRF", [sys.executable, os.path.join("tests", "test_modal_opt_harmonic.py")]),
 ]
 
 

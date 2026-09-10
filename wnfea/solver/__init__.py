@@ -58,6 +58,12 @@ from .buckling_analysis import (
     solve_linear_buckling,
 )
 
+from .harmonic_response import (
+    HarmonicResponseResult,
+    solve_harmonic_modal_superposition,
+    solve_direct_harmonic_pcg,
+)
+
 __all__ = [
     "BeamSolver",
     "SolverError",
@@ -101,5 +107,8 @@ __all__ = [
     "BucklingResult",
     "MatrixFreeGeometricStiffnessOperator",
     "solve_linear_buckling",
+    "HarmonicResponseResult",
+    "solve_harmonic_modal_superposition",
+    "solve_direct_harmonic_pcg",
 ]
 

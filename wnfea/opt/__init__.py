@@ -48,6 +48,13 @@ from .am_overhang import (
     AMFilterResult,
 )
 
+from .modal_opt import (
+    FrequencyConstrainedConfig,
+    FrequencyOptResult,
+    ModalSensitivityEvaluator,
+    FrequencyConstrainedOptimizer,
+)
+
 __all__ = [
     "TopologyOptimizer",
     "TopologyConfig",
@@ -74,5 +81,9 @@ __all__ = [
     "CARBON_PEEK",
     "AMOverhangFilter",
     "AMFilterResult",
+    "FrequencyConstrainedConfig",
+    "FrequencyOptResult",
+    "ModalSensitivityEvaluator",
+    "FrequencyConstrainedOptimizer",
 ]
 

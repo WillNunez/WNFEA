@@ -318,20 +318,39 @@ This document is the persistent execution backlog for autonomous development of 
 ---
 
 ### Phase 17: Dynamic Frequency-Constrained Generative Optimization & Harmonic Response
-- [ ] **Task 17.1: Matrix-Free Frequency-Constrained Eigenvalue Sensitivity Engine**
+- [x] **Task 17.1: Matrix-Free Frequency-Constrained Eigenvalue Sensitivity Engine**
   - **Objective**: Implement `wnfea/opt/modal_opt.py` evaluating modal eigenvalue sensitivities $\frac{\partial \omega_j^2}{\partial \rho_e} = \boldsymbol{\phi}_j^T \left( \frac{\partial \mathbf{K}}{\partial \rho_e} - \omega_j^2 \frac{\partial \mathbf{M}}{\partial \rho_e} \right) \boldsymbol{\phi}_j$ in matrix-free form. Formulate dual compliance and natural frequency lower bound constraints ($\omega_1 \ge \omega_{target}$) preventing resonance and dynamic vibration.
   - **Acceptance Criteria**: Eigenvalue sensitivities match finite difference to $< 10^{-5}$; optimizer drives fundamental mode frequency strictly above resonance floor.
-  - **Verification**: `python run_all_tests.py`.
+  - **Verification**: `python run_all_tests.py`. (PASSED - exact sensitivity parity $1.05 \times 10^{-8}$ error, drives $f_1 \ge f_{target}$)
 
-- [ ] **Task 17.2: Matrix-Free Steady-State Harmonic Response & Dynamic FRF Operator**
+- [x] **Task 17.2: Matrix-Free Steady-State Harmonic Response & Dynamic FRF Operator**
   - **Objective**: Implement `wnfea/solver/harmonic_response.py` evaluating frequency response functions (FRF) $\mathbf{H}(\omega) = (-\omega^2 \mathbf{M} + i \omega \mathbf{C} + \mathbf{K})^{-1} \mathbf{f}$ across frequency sweeps without global system factorizations, utilizing modal superposition and matrix-free Krylov solvers.
   - **Acceptance Criteria**: Exact dynamic resonance amplification at natural frequencies and exact match with analytical steady-state cantilever frequency response.
-  - **Verification**: `python run_all_tests.py`.
+  - **Verification**: `python run_all_tests.py`. (PASSED - $Q \approx 1/(2\zeta)$ resonance amplification, 0.04% match between direct and modal superposition)
 
-- [ ] **Task 17.3: Dynamic Frequency Verification Suite & Case Study**
+- [x] **Task 17.3: Dynamic Frequency Verification Suite & Case Study**
   - **Objective**: Implement `tests/test_modal_opt_harmonic.py` verifying modal sensitivities, frequency-constrained topology optimization, and steady-state harmonic FRF response.
   - **Acceptance Criteria**: 100% pass rate in verification harness.
+  - **Verification**: `python run_all_tests.py`. (PASSED - 27/27 test suites pass 100% in 22.03s)
+
+---
+
+### Phase 18: Aero-Structural Fatigue Life & Cyclic Damage Estimation Engine
+- [ ] **Task 18.1: Rainflow Cycle Counting & S-N Cumulative Damage Solver**
+  - **Objective**: Implement `wnfea/fatigue/fatigue_solver.py` providing ASTM E1049-85 Rainflow cycle counting on dynamic transient and harmonic stress histories $\boldsymbol{\sigma}(t)$. Formulate Basquin and Wöhler S-N fatigue curves with Goodman, Gerber, and Morrow mean stress corrections, evaluating Palmgren-Miner cumulative damage $D = \sum \frac{n_i}{N_i}$ and fatigue life $N_f$ cycles to failure per element.
+  - **Acceptance Criteria**: Rainflow counting matches ASTM benchmark sequences exactly; fatigue life matches analytical Basquin/Goodman calculations to $< 0.1\%$.
   - **Verification**: `python run_all_tests.py`.
+
+- [ ] **Task 18.2: Multiaxial Critical Plane & Dang Van Fatigue Limit Criterion**
+  - **Objective**: Implement `wnfea/fatigue/critical_plane.py` evaluating critical plane shear and normal stress combinations $\max_\theta (\tau_a + k \sigma_{n, max})$ and Dang Van mesoscopic fatigue limits for out-of-phase multiaxial stress states with zero memory overhead.
+  - **Acceptance Criteria**: Exact identification of critical fatigue crack orientation and multiaxial safety factor parity under non-proportional loading.
+  - **Verification**: `python run_all_tests.py`.
+
+- [ ] **Task 18.3: Fatigue Verification Suite & ParaView Damage Field Integration**
+  - **Objective**: Implement `tests/test_fatigue_life.py` verifying Rainflow counting, S-N curve corrections, multiaxial critical plane evaluation, and extending ParaView export with logarithmic fatigue life $\log_{10}(N_f)$ and cumulative damage contours $D_e$.
+  - **Acceptance Criteria**: 100% pass rate in verification harness.
+  - **Verification**: `python run_all_tests.py`.
+
 
 
 

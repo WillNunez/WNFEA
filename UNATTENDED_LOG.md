@@ -561,5 +561,38 @@ This journal records all autonomous progress, test outcomes, commit hashes, and 
     - Registered 26th verification suite in `run_all_tests.py`, maintaining 100% pass rate across all 26 suites in 20.70s.
   - **Phase 16 Complete & Verified.**
 
+### [2026-09-10 15:00] Phase 17: Dynamic Frequency-Constrained Generative Optimization & Harmonic Response
+- **Status**: SUCCESS
+- **Files Modified / Added**:
+  - `wnfea/opt/modal_opt.py` [NEW - Matrix-free frequency-constrained topology optimizer & modal eigenvalue sensitivity evaluator]
+  - `wnfea/solver/harmonic_response.py` [NEW - Matrix-free steady-state harmonic response sweep & direct PCG solver]
+  - `wnfea/opt/__init__.py` [MODIFIED - Export Phase 17 modal optimization classes]
+  - `wnfea/solver/__init__.py` [MODIFIED - Export Phase 17 harmonic response solvers]
+  - `tests/test_modal_opt_harmonic.py` [NEW - 7 comprehensive verification tests]
+  - `run_all_tests.py` [MODIFIED - Registered 27th test suite]
+  - `UNATTENDED_ROADMAP.md` [MODIFIED - Phase 17 completed, Phase 18 defined]
+  - `UNATTENDED_LOG.md` [MODIFIED]
+- **Verification**:
+  - `python run_all_tests.py` -> 27/27 suites passed (100% pass rate in 22.03s)
+  - `python tests/test_modal_opt_harmonic.py` -> 7/7 tests passed in 0.228s
+- **Key Changes & Metrics**:
+  - **Task 17.1 (Matrix-Free Frequency-Constrained Eigenvalue Sensitivity Engine)**:
+    - Implemented `ModalSensitivityEvaluator` and `FrequencyConstrainedOptimizer` in `wnfea/opt/modal_opt.py`.
+    - Evaluates exact closed-form eigenvalue sensitivities $\frac{\partial \omega_j^2}{\partial \rho_e} = \boldsymbol{\phi}_j^T [\frac{\partial \mathbf{K}}{\partial \rho_e} - \omega_j^2 \frac{\partial \mathbf{M}}{\partial \rho_e}] \boldsymbol{\phi}_j$ without assembling global $\mathbf{K}$ or $\mathbf{M}$ matrices.
+    - Verified exact match against central finite differences to $1.05 \times 10^{-8}$ relative error.
+    - Verified cantilever sensitivity gradient: root elements possess positive sensitivity (stiffness dominance), while tip elements possess negative sensitivity (inertial mass dominance).
+    - Optimizer drives fundamental frequency $f_1 \ge f_{target}$ while meeting volume fraction constraints, automatically removing tip ballast mass and thickening root support.
+  - **Task 17.2 (Matrix-Free Steady-State Harmonic Response & Dynamic FRF Operator)**:
+    - Implemented `solve_harmonic_modal_superposition` and `solve_direct_harmonic_pcg` in `wnfea/solver/harmonic_response.py`.
+    - Modal superposition sweeps 250 excitation frequencies in $< 5\text{ ms}$, extracting complex displacements, magnitudes, phase angles, and resonance peak frequencies.
+    - Verified dynamic amplification factor $Q \approx 1 / (2\zeta)$ at natural resonance to within $2\%$.
+    - Verified classical phase lag transition: in-phase ($0^\circ$) below resonance, $-90^\circ$ at resonance, approaching $-180^\circ$ above resonance.
+    - Verified direct matrix-free Krylov harmonic solver matches modal superposition to $0.04\%$ relative error.
+  - **Task 17.3 (Dynamic Frequency Verification Suite & Case Study)**:
+    - Implemented 7 verification tests in `tests/test_modal_opt_harmonic.py` covering eigenvalue sensitivity parity, cantilever sensitivity gradient, frequency-constrained topology optimization, harmonic modal sweep, direct vs modal parity, phase angle transition across resonance, and wide-band multi-mode peak detection.
+    - Registered 27th verification suite in `run_all_tests.py`, maintaining 100% pass rate across all 27 suites in 22.03s.
+  - **Phase 17 Complete & Verified.**
+
+
 
 
