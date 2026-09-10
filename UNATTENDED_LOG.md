@@ -593,6 +593,42 @@ This journal records all autonomous progress, test outcomes, commit hashes, and 
     - Registered 27th verification suite in `run_all_tests.py`, maintaining 100% pass rate across all 27 suites in 22.03s.
   - **Phase 17 Complete & Verified.**
 
+### [2026-09-10 17:00] Phase 18: Aero-Structural Fatigue Life & Cyclic Damage Estimation Engine
+- **Status**: SUCCESS
+- **Files Modified / Added**:
+  - `wnfea/fatigue/__init__.py` [NEW - Fatigue module initialization]
+  - `wnfea/fatigue/fatigue_solver.py` [NEW - ASTM E1049-85 Rainflow cycle counting, Basquin S-N curves, Goodman/Gerber/Morrow/Soderberg mean stress corrections, and Palmgren-Miner damage accumulation]
+  - `wnfea/fatigue/critical_plane.py` [NEW - Multiaxial critical plane search (Findley, Fatemi-Socie, SWT) and Dang Van mesoscopic fatigue limit criterion]
+  - `wnfea/results/paraview_export.py` [MODIFIED - Added fatigue_damage and log_fatigue_life field export to VTU]
+  - `tests/test_fatigue_life.py` [NEW - 8 comprehensive verification tests]
+  - `run_all_tests.py` [MODIFIED - Registered 28th test suite]
+  - `UNATTENDED_ROADMAP.md` [MODIFIED - Phase 18 completed, Phase 19 defined]
+  - `UNATTENDED_LOG.md` [MODIFIED]
+- **Verification**:
+  - `python run_all_tests.py` -> 28/28 suites passed (100% pass rate in 22.25s)
+  - `python tests/test_fatigue_life.py` -> 8/8 tests passed in 0.105s
+- **Key Changes & Metrics**:
+  - **Task 18.1 (Rainflow Cycle Counting & S-N Cumulative Damage Solver)**:
+    - Implemented `extract_peaks_valleys` filtering out monotonic and duplicate points while strictly preserving reversal extrema.
+    - Implemented `count_rainflow_cycles` strictly obeying the ASTM E1049-85 Section 5.4.4 standard four-point algorithm.
+    - Verified exact cycle count and mean stress on the ASTM E1049-85 Section 5.4.4 Fig. 8 benchmark sequence (2.0 full cycles, 5 half cycles, total 4.5 cycles).
+    - Formulated analytical Basquin S-N fatigue curve $S_a = \sigma_f' (2 N_f)^b$ matching hand calculations to $< 0.01\%$.
+    - Implemented Goodman, Gerber, Morrow, and Soderberg mean stress corrections with verified conservatism hierarchy: $N_{f, Soderberg} < N_{f, Goodman} < N_{f, Gerber} < N_{f, uncorrected}$, and verified compressive mean stress non-penalization.
+    - Implemented `evaluate_palmgren_miner_damage` for cumulative damage $D = \sum \frac{n_i}{N_i}$ and repetition blocks to failure.
+    - Implemented vectorized element-wise fatigue life evaluation `evaluate_element_fatigue_life` supporting scalar histories and 3D Voigt stress tensors.
+  - **Task 18.2 (Multiaxial Critical Plane & Dang Van Fatigue Limit Criterion)**:
+    - Implemented `evaluate_critical_plane` in `wnfea/fatigue/critical_plane.py` sweeping candidate material orientations $\mathbf{n}(\theta, \phi)$.
+    - Evaluates Findley ($FP = \tau_a + k \sigma_{n,max}$), Fatemi-Socie ($FS = \tau_a (1 + k \sigma_{n,max}/\sigma_y)$), and Smith-Watson-Topper ($SWT = \sigma_{n,max} \Delta \sigma_n / 2$) parameters.
+    - Verified critical orientation under pure tension ($\theta = 45^\circ$, $\tau_a = 0.5 \sigma_0$) and pure torsion ($\tau_a = \tau_0$).
+    - Implemented `evaluate_dang_van_safety_factor` evaluating mesoscopic hydrostatic stress $p_H(t) = \frac{1}{3}\text{tr}(\boldsymbol{\sigma}(t))$ and shakedown Tresca deviatoric shear stress $\tau(t)$.
+    - Verified Dang Van safety factor $SF_{DV} = 1.0$ at torsion endurance limit, with verified tensile hydrostatic stress penalty.
+  - **Task 18.3 (Fatigue Verification Suite & ParaView Damage Field Integration)**:
+    - Extended `export_voxel_grid_vtu` to serialize `FatigueDamage` ($D_e$) and `Log10_FatigueLife` ($\log_{10} N_f$) fields.
+    - Implemented 8 verification tests in `tests/test_fatigue_life.py` passing 100% in 0.105s.
+    - Registered 28th verification suite in `run_all_tests.py`, maintaining 100% pass rate across all 28 suites in 22.25s.
+  - **Phase 18 Complete & Verified.**
+
+
 
 
 

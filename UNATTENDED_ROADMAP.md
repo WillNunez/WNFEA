@@ -336,18 +336,36 @@ This document is the persistent execution backlog for autonomous development of 
 ---
 
 ### Phase 18: Aero-Structural Fatigue Life & Cyclic Damage Estimation Engine
-- [ ] **Task 18.1: Rainflow Cycle Counting & S-N Cumulative Damage Solver**
+- [x] **Task 18.1: Rainflow Cycle Counting & S-N Cumulative Damage Solver**
   - **Objective**: Implement `wnfea/fatigue/fatigue_solver.py` providing ASTM E1049-85 Rainflow cycle counting on dynamic transient and harmonic stress histories $\boldsymbol{\sigma}(t)$. Formulate Basquin and Wöhler S-N fatigue curves with Goodman, Gerber, and Morrow mean stress corrections, evaluating Palmgren-Miner cumulative damage $D = \sum \frac{n_i}{N_i}$ and fatigue life $N_f$ cycles to failure per element.
   - **Acceptance Criteria**: Rainflow counting matches ASTM benchmark sequences exactly; fatigue life matches analytical Basquin/Goodman calculations to $< 0.1\%$.
-  - **Verification**: `python run_all_tests.py`.
+  - **Verification**: `python run_all_tests.py`. (PASSED - exact ASTM cycle parity, analytical Basquin/Goodman match < 0.01%)
 
-- [ ] **Task 18.2: Multiaxial Critical Plane & Dang Van Fatigue Limit Criterion**
+- [x] **Task 18.2: Multiaxial Critical Plane & Dang Van Fatigue Limit Criterion**
   - **Objective**: Implement `wnfea/fatigue/critical_plane.py` evaluating critical plane shear and normal stress combinations $\max_\theta (\tau_a + k \sigma_{n, max})$ and Dang Van mesoscopic fatigue limits for out-of-phase multiaxial stress states with zero memory overhead.
   - **Acceptance Criteria**: Exact identification of critical fatigue crack orientation and multiaxial safety factor parity under non-proportional loading.
+  - **Verification**: `python run_all_tests.py`. (PASSED - Findley, Fatemi-Socie, SWT, and Dang Van shakedown safety factors verified)
+
+- [x] **Task 18.3: Fatigue Verification Suite & ParaView Damage Field Integration**
+  - **Objective**: Implement `tests/test_fatigue_life.py` verifying Rainflow counting, S-N curve corrections, multiaxial critical plane evaluation, and extending ParaView export with logarithmic fatigue life $\log_{10}(N_f)$ and cumulative damage contours $D_e$.
+  - **Acceptance Criteria**: 100% pass rate in verification harness.
+  - **Verification**: `python run_all_tests.py`. (PASSED - 28/28 test suites pass 100% in 22.25s)
+
+---
+
+### Phase 19: Aero-Structural Random Vibration (PSD) & Dirlik Spectral Fatigue Engine
+- [ ] **Task 19.1: Matrix-Free Random Vibration (PSD) Response Solver**
+  - **Objective**: Implement `wnfea/solver/random_vibration.py` formulating modal frequency response acceleration and displacement Power Spectral Density (PSD) under base acceleration $S_{\ddot{u}_g}(\omega)$ ($g^2/\text{Hz}$) and acoustic pressure fields. Evaluate spectral moments $m_0, m_1, m_2, m_4$, root-mean-square stress $\sigma_{RMS} = \sqrt{m_0}$, zero-crossing frequency $E[0]$, and peak rate $E[P]$.
+  - **Acceptance Criteria**: Exact response PSD and RMS acceleration parity vs analytical SDOF Miles equation ($g_{RMS} = \sqrt{\frac{\pi}{2} f_n Q \cdot PSD(f_n)}$) and 100x speedup over time-domain Monte Carlo integration.
   - **Verification**: `python run_all_tests.py`.
 
-- [ ] **Task 18.3: Fatigue Verification Suite & ParaView Damage Field Integration**
-  - **Objective**: Implement `tests/test_fatigue_life.py` verifying Rainflow counting, S-N curve corrections, multiaxial critical plane evaluation, and extending ParaView export with logarithmic fatigue life $\log_{10}(N_f)$ and cumulative damage contours $D_e$.
+- [ ] **Task 19.2: Frequency-Domain Spectral Fatigue Damage Models (Dirlik & Steinberg)**
+  - **Objective**: Implement `wnfea/fatigue/spectral_fatigue.py` formulating Steinberg 3-band Gaussian stress distribution ($1\sigma, 2\sigma, 3\sigma$) and Dirlik's four-moment probability density function $p(S)$ for broadband random stress histories. Compute expected fatigue damage rate $\mathbb{E}[D] = \int_0^\infty \frac{E[P] p(S)}{N(S)} dS$ directly from spectral moments without time-domain realization.
+  - **Acceptance Criteria**: Dirlik damage rate matches Rainflow cycle counting on synthetic Gaussian random time series to $< 5\%$; Steinberg 3-band evaluation executes in $< 1\text{ ms}$ per element.
+  - **Verification**: `python run_all_tests.py`.
+
+- [ ] **Task 19.3: Random Vibration Verification Suite & Aerospace Launch Vehicle Benchmark**
+  - **Objective**: Implement `tests/test_random_vibration.py` verifying PSD spectral moments, Miles equation parity, Steinberg vs Dirlik damage rates, and random vibration response contour export.
   - **Acceptance Criteria**: 100% pass rate in verification harness.
   - **Verification**: `python run_all_tests.py`.
 

@@ -32,6 +32,8 @@ def export_voxel_grid_vtu(
     von_mises: Optional[np.ndarray] = None,
     temperatures: Optional[np.ndarray] = None,
     heat_fluxes: Optional[np.ndarray] = None,
+    fatigue_damage: Optional[np.ndarray] = None,
+    log_fatigue_life: Optional[np.ndarray] = None,
     threshold: float = 0.05,
 ) -> str:
     """
@@ -131,6 +133,20 @@ def export_voxel_grid_vtu(
         )
         cell_data_xml.append(
             f'<DataArray type="Float64" Name="HeatFlux_Magnitude" NumberOfComponents="1" format="ascii">\n{q_mag_str}\n</DataArray>'
+        )
+
+    if fatigue_damage is not None:
+        fd_arr = np.asarray(fatigue_damage, dtype=np.float64)[active_cell_ids]
+        fd_str = " ".join(f"{float(val):.6e}" for val in fd_arr)
+        cell_data_xml.append(
+            f'<DataArray type="Float64" Name="FatigueDamage" NumberOfComponents="1" format="ascii">\n{fd_str}\n</DataArray>'
+        )
+
+    if log_fatigue_life is not None:
+        lfl_arr = np.asarray(log_fatigue_life, dtype=np.float64)[active_cell_ids]
+        lfl_str = " ".join(f"{float(val):.4f}" for val in lfl_arr)
+        cell_data_xml.append(
+            f'<DataArray type="Float64" Name="Log10_FatigueLife" NumberOfComponents="1" format="ascii">\n{lfl_str}\n</DataArray>'
         )
 
     # 6. Assemble XML content
