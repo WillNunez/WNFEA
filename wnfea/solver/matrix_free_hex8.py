@@ -173,9 +173,9 @@ class MatrixFreeHex8Operator(spla.LinearOperator):
 
         # Dirichlet boundary conditions
         if fixed_dofs is not None and len(fixed_dofs) > 0:
-            self.fixed_dofs_mask = np.zeros(self.n_dofs, dtype=bool)
-            self.fixed_dofs_mask[fixed_dofs] = True
             self.fixed_dofs = np.asarray(fixed_dofs, dtype=np.int64)
+            self.fixed_dofs_mask = np.zeros(self.n_dofs, dtype=bool)
+            self.fixed_dofs_mask[self.fixed_dofs] = True
         else:
             self.fixed_dofs_mask = np.zeros(self.n_dofs, dtype=bool)
             self.fixed_dofs = np.empty(0, dtype=np.int64)

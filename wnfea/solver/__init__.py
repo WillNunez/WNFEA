@@ -31,6 +31,20 @@ from .adaptive_solve_loop import (
     run_adaptive_voxel_amr_pipeline,
 )
 
+from .outofcore_streaming import (
+    ChunkedStreamingConfig,
+    ChunkedStreamingTelemetry,
+    ChunkedStreamingMatrixFreeOperator,
+)
+
+from .hierarchical_warmstart import (
+    HierarchicalWarmStartResult,
+    HierarchicalCoarseMeshWarmStart,
+    project_voxel_to_fine_mesh,
+    project_amr_to_fine_mesh,
+    compute_hierarchical_warmstart,
+)
+
 __all__ = [
     "BeamSolver",
     "SolverError",
@@ -59,5 +73,13 @@ __all__ = [
     "solve_isolated_subdomain",
     "AdaptiveSubdomainResult",
     "run_adaptive_voxel_amr_pipeline",
+    "ChunkedStreamingConfig",
+    "ChunkedStreamingTelemetry",
+    "ChunkedStreamingMatrixFreeOperator",
+    "HierarchicalWarmStartResult",
+    "HierarchicalCoarseMeshWarmStart",
+    "project_voxel_to_fine_mesh",
+    "project_amr_to_fine_mesh",
+    "compute_hierarchical_warmstart",
 ]
 
