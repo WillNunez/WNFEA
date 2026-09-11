@@ -188,9 +188,9 @@ class TestRandomVibration(unittest.TestCase):
         Run end-to-end Random Vibration & Spectral Fatigue evaluation on a 3D cantilever voxel beam
         under NAVMAT P-9492 base excitation.
         """
-        # 1. Generate a 4x2x2 cantilever voxel grid
+        # 1. Generate a 4x2x2 cantilever voxel grid (0.06m x 0.04m breaks degenerate bending symmetry)
         grid = VoxelMesher.create_box_grid(
-            bounds=(0.0, 0.20, 0.0, 0.05, 0.0, 0.05),
+            bounds=(0.0, 0.20, 0.0, 0.06, 0.0, 0.04),
             resolution=(4, 2, 2),
         )
 

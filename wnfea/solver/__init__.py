@@ -70,6 +70,12 @@ from .random_vibration import (
     solve_random_vibration,
 )
 
+from .plasticity_solver import (
+    ElastoPlasticStepResult,
+    ElastoPlasticSolveResult,
+    solve_elastoplastic_increments,
+)
+
 __all__ = [
     "BeamSolver",
     "SolverError",
@@ -119,5 +125,8 @@ __all__ = [
     "BaseExcitationPSD",
     "RandomVibrationResult",
     "solve_random_vibration",
+    "ElastoPlasticStepResult",
+    "ElastoPlasticSolveResult",
+    "solve_elastoplastic_increments",
 ]
 

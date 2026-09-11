@@ -726,7 +726,46 @@ This journal records all autonomous progress, test outcomes, commit hashes, and 
   - **Task 21.3 (Aeroelastic Verification Suite & 3D Swept Wing Benchmark)**:
     - Authored 8 verification tests in `tests/test_aeroelastic_flutter.py` covering Biot-Savart induction, finite wing lift slope, 3D compressibility, conservative spline virtual work equality, Theodorsen asymptotic limits, Fung typical section flutter, analytical static divergence, and 3D swept trapezoidal wing VLM meshing.
     - Registered 31st verification suite in `run_all_tests.py`, maintaining 100% pass rate across all 31 suites in 30.50s.
-  - **Phase 21 Complete & Verified.**
+### [2026-09-11 09:00] Phase 22: Non-Linear J2 von Mises Elasto-Plasticity & Isotropic Hardening Engine for Metals
+- **Status**: SUCCESS
+- **Files Modified / Added**:
+  - `wnfea/materials/plasticity.py` [NEW - HardeningType enum, MetalPlasticMaterial with presets for Al 6061-T6, Al 7075-T6, Ti-6Al-4V, S355 Structural Steel, and 304 Stainless Steel, PlasticHistoryState, implicit radial return mapping algorithm, and exact symmetric consistent algorithmic elastoplastic tangent operator C_ep]
+  - `wnfea/materials/__init__.py` [MODIFIED - Exported plasticity classes and radial return mapping]
+  - `wnfea/solver/plasticity_solver.py` [NEW - ElastoPlasticStepResult, ElastoPlasticSolveResult, solve_elastoplastic_increments with 2x2x2 Gauss quadrature Hex8 formulation, consistent tangent assembly, elastic tangent predictor on load reversal/unloading, and permanent plastic deflection/residual stress tracking]
+  - `wnfea/solver/__init__.py` [MODIFIED - Exported plasticity solver classes]
+  - `tests/test_elasto_plasticity.py` [NEW - 8 comprehensive verification tests for elasto-plasticity]
+  - `tests/test_random_vibration.py` [MODIFIED - Rectangular beam cross-section 0.06m x 0.04m to eliminate duplicate bending eigenvalue degeneracy]
+  - `run_all_tests.py` [MODIFIED - Registered 32nd test suite: Non-Linear J2 Elasto-Plasticity & Isotropic Hardening]
+  - `UNATTENDED_ROADMAP.md` [MODIFIED - Phase 22 completed]
+  - `UNATTENDED_LOG.md` [MODIFIED]
+- **Verification**:
+  - `python run_all_tests.py` -> 32/32 suites passed (100% pass rate in 30.90s)
+  - `python tests/test_elasto_plasticity.py` -> 8/8 tests passed in 0.023s
+- **Key Changes & Metrics**:
+  - **Task 22.1 (Rate-Independent J2 Plasticity & Isotropic Hardening Models)**:
+    - Implemented `MetalPlasticMaterial` supporting `LINEAR`, `VOCE`, `POWER_LAW`, and `PERFECT_PLASTIC` hardening laws.
+    - Alloy presets provided: Al 6061-T6, Al 7075-T6, Ti-6Al-4V, Structural Steel S355, Stainless Steel 304.
+    - Verified uniaxial tension matches theoretical bilinear slope $E_t = \frac{E H}{E + H}$ to $< 10^{-14}$.
+    - Verified pure shear yielding occurs at exact theoretical $\tau_y = \sigma_{y0} / \sqrt{3}$ to $< 10^{-15}$.
+    - Verified Voce saturation hardening asymptotically converges to $\sigma_{y0} + R_\infty$ as $\bar{\epsilon}^p \to \infty$.
+  - **Task 22.2 (Vectorized Radial Return Mapping & Consistent Algorithmic Tangent Operator)**:
+    - Implemented implicit backward-Euler radial return mapping with closed-form root solve for linear hardening and local Newton-Raphson solver for non-linear Voce/Swift hardening (converging in 3 iterations).
+    - Formulated strictly symmetric consistent algorithmic tangent operator $\mathbf{C}^{ep} = \frac{\partial \boldsymbol{\sigma}_{n+1}}{\partial \boldsymbol{\epsilon}_{n+1}}$ in Voigt notation $[xx, yy, zz, yz, zx, xy]^T$:
+      $\mathbf{C}^{ep} = K_{bulk} (\mathbf{m} \otimes \mathbf{m}) + 2 G \beta_0 \mathbf{P}_{dev} - c_{scalar} (\mathbf{s}^{tr} \otimes \mathbf{s}^{tr})$.
+    - Tangent parity: matches numerical central finite-difference perturbation with relative error **$1.48 \times 10^{-7}$**.
+    - Plastic incompressibility: exact preservation of $\text{tr}(\Delta \boldsymbol{\epsilon}^p) = 0$ to **$< 10^{-14}$**.
+  - **Task 22.3 (Non-Linear Incremental Elasto-Plastic Solver & Plastic Bending Benchmark)**:
+    - Implemented `solve_elastoplastic_increments` using $2 \times 2 \times 2$ Gauss quadrature Hex8 integration, eliminating hourglass zero-energy modes and yielding strictly positive definite tangent stiffness.
+    - Added elastic tangent predictor on load reversal ($\lambda_{k+1} < \lambda_k$, it = 0) ensuring instantaneous, non-divergent convergence upon unloading.
+    - Verified incremental 3D cantilever plastic bending under 30 kN tip load:
+      - Step 0 ($\lambda = 0.2$): purely elastic deflection $-0.51\text{ mm}$, converged in 1 iteration ($res = 2.69 \times 10^{-13}$).
+      - Step 1 ($\lambda = 0.6$): onset of plastic yield, 48 yielded Gauss points, converged in 4 iterations ($res = 4.28 \times 10^{-6}$).
+      - Step 2 ($\lambda = 1.0$): full plastic bending, peak deflection $-11.07\text{ mm}$, 124 yielded Gauss points, converged in 6 iterations ($res = 1.03 \times 10^{-11}$).
+      - Step 3 ($\lambda = 0.0$): complete elastic unloading and springback, recovered $2.55\text{ mm}$ of elastic deflection, permanent residual deflection $-8.52\text{ mm}$, converged in 1 iteration ($res = 2.57 \times 10^{-12}$).
+      - Locked-in residual stress field $> 1\text{ MPa}$ verified in unloaded state.
+    - Registered 32nd verification suite in `run_all_tests.py`, maintaining 100% pass rate across all 32 suites in 30.90s.
+  - **Phase 22 Complete & Verified.**
+
 
 
 

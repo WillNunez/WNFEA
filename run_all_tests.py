@@ -43,7 +43,9 @@ TEST_SUITES = [
     ("Aero-Structural Random Vibration & Spectral Fatigue", [sys.executable, os.path.join("tests", "test_random_vibration.py")]),
     ("Functionally Graded TPMS & Microstructure Homogenization", [sys.executable, os.path.join("tests", "test_tpms_homogenization.py")]),
     ("Aeroelastic Flutter & Vortex Lattice Aerodynamic Engine", [sys.executable, os.path.join("tests", "test_aeroelastic_flutter.py")]),
+    ("Non-Linear J2 Elasto-Plasticity & Isotropic Hardening", [sys.executable, os.path.join("tests", "test_elasto_plasticity.py")]),
 ]
+
 
 
 

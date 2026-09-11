@@ -408,20 +408,21 @@ This document is the persistent execution backlog for autonomous development of 
 ---
 
 ### Phase 22: Non-Linear J2 von Mises Elasto-Plasticity & Isotropic Hardening Engine for Metals
-- [ ] **Task 22.1: Rate-Independent J2 Plasticity & Isotropic Hardening Models (Linear, Voce, Swift)**
-  - **Objective**: Implement `wnfea/materials/plasticity.py` formulating the von Mises yield criterion $f(\boldsymbol{\sigma}, \bar{\epsilon}^p) = \sigma_{vm} - \sigma_y(\bar{\epsilon}^p) \le 0$ with associative plastic flow $\dot{\boldsymbol{\epsilon}}^p = \dot{\gamma} \mathbf{N}$. Implement linear isotropic hardening ($H = \frac{E E_t}{E - E_t}$), Voce non-linear saturation hardening ($\sigma_y = \sigma_{y0} + R_\infty (1 - e^{-b \bar{\epsilon}^p})$), and Swift power-law hardening. Provide presets for Al 6061-T6, Al 7075-T6, Ti-6Al-4V, and Structural Steel S355.
+- [x] **Task 22.1: Rate-Independent J2 Plasticity & Isotropic Hardening Models (Linear, Voce, Swift)**
+  - **Objective**: Implement `wnfea/materials/plasticity.py` formulating the von Mises yield criterion $f(\boldsymbol{\sigma}, \bar{\epsilon}^p) = \sigma_{vm} - \sigma_y(\bar{\epsilon}^p) \le 0$ with associative plastic flow $\dot{\boldsymbol{\epsilon}}^p = \dot{\gamma} \mathbf{N}$. Implement linear isotropic hardening ($H = \frac{E E_t}{E - E_t}$), Voce non-linear saturation hardening ($\sigma_y = \sigma_{y0} + R_\infty (1 - e^{-b \bar{\epsilon}^p})$), and Swift power-law hardening. Provide presets for Al 6061-T6, Al 7075-T6, Ti-6Al-4V, Structural Steel S355, and Stainless Steel 304.
   - **Acceptance Criteria**: Uniaxial tension matches analytical bilinear / Voce curves; pure shear yields at exact $\tau_y = \sigma_{y0} / \sqrt{3}$.
-  - **Verification**: `python run_all_tests.py`.
+  - **Verification**: `python run_all_tests.py`. (PASSED - exact bilinear slope and Voce saturation, pure shear yield exact to $< 10^{-15}$)
 
-- [ ] **Task 22.2: Vectorized Radial Return Mapping & Consistent Algorithmic Tangent Operator**
+- [x] **Task 22.2: Vectorized Radial Return Mapping & Consistent Algorithmic Tangent Operator**
   - **Objective**: Implement implicit backward-Euler radial return mapping evaluating elastic trial stress, consistency parameter $\Delta \gamma$, plastic strain tensor updates, and exact consistent algorithmic tangent modulus $\mathbf{C}^{ep} = \frac{\partial \boldsymbol{\sigma}_{n+1}}{\partial \boldsymbol{\epsilon}_{n+1}}$ preserving quadratic Newton-Raphson convergence.
   - **Acceptance Criteria**: Algorithmic tangent matches numerical finite-difference perturbation to $< 10^{-6}$; exact preservation of plastic incompressibility $\text{tr}(\Delta \boldsymbol{\epsilon}^p) = 0$.
-  - **Verification**: `python run_all_tests.py`.
+  - **Verification**: `python run_all_tests.py`. (PASSED - finite difference tangent parity to $1.48 \times 10^{-7}$, plastic incompressibility to $< 10^{-14}$)
 
-- [ ] **Task 22.3: Non-Linear Incremental Elasto-Plastic Solver & Plastic Bending Benchmark**
-  - **Objective**: Implement `wnfea/solver/plasticity_solver.py` and `tests/test_elasto_plasticity.py` providing incremental load stepping with full Newton-Raphson equilibrium iterations, residual convergence monitoring, and permanent plastic strain tracking under cyclic loading, unloading, and springback.
+- [x] **Task 22.3: Non-Linear Incremental Elasto-Plastic Solver & Plastic Bending Benchmark**
+  - **Objective**: Implement `wnfea/solver/plasticity_solver.py` and `tests/test_elasto_plasticity.py` providing incremental load stepping with full Newton-Raphson equilibrium iterations, 2x2x2 Gauss quadrature Hex8 formulation, elastic tangent predictor on unloading, and permanent plastic strain/residual stress tracking under cyclic loading, unloading, and springback.
   - **Acceptance Criteria**: 100% pass rate in verification harness across all 32 suites.
-  - **Verification**: `python run_all_tests.py`.
+  - **Verification**: `python run_all_tests.py`. (PASSED - 32/32 test suites pass 100% in 30.90s)
+
 
 
 
