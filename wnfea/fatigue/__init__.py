@@ -21,6 +21,12 @@ from .critical_plane import (
     evaluate_critical_plane,
     evaluate_dang_van_safety_factor,
 )
+from .spectral_fatigue import (
+    evaluate_steinberg_damage_rate,
+    evaluate_narrowband_damage_rate,
+    evaluate_dirlik_damage_rate,
+    evaluate_mesh_spectral_fatigue,
+)
 
 __all__ = [
     "RainflowCycle",
@@ -33,4 +39,8 @@ __all__ = [
     "CriticalPlaneResult",
     "evaluate_critical_plane",
     "evaluate_dang_van_safety_factor",
+    "evaluate_steinberg_damage_rate",
+    "evaluate_narrowband_damage_rate",
+    "evaluate_dirlik_damage_rate",
+    "evaluate_mesh_spectral_fatigue",
 ]

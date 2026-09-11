@@ -64,6 +64,12 @@ from .harmonic_response import (
     solve_direct_harmonic_pcg,
 )
 
+from .random_vibration import (
+    BaseExcitationPSD,
+    RandomVibrationResult,
+    solve_random_vibration,
+)
+
 __all__ = [
     "BeamSolver",
     "SolverError",
@@ -110,5 +116,8 @@ __all__ = [
     "HarmonicResponseResult",
     "solve_harmonic_modal_superposition",
     "solve_direct_harmonic_pcg",
+    "BaseExcitationPSD",
+    "RandomVibrationResult",
+    "solve_random_vibration",
 ]
 

@@ -40,6 +40,7 @@ TEST_SUITES = [
     ("Multi-Material Optimization & Additive Manufacturing", [sys.executable, os.path.join("tests", "test_multi_material_am.py")]),
     ("Dynamic Frequency Optimization & Harmonic FRF", [sys.executable, os.path.join("tests", "test_modal_opt_harmonic.py")]),
     ("Aero-Structural Fatigue Life & Cyclic Damage Engine", [sys.executable, os.path.join("tests", "test_fatigue_life.py")]),
+    ("Aero-Structural Random Vibration & Spectral Fatigue", [sys.executable, os.path.join("tests", "test_random_vibration.py")]),
 ]
 
 
