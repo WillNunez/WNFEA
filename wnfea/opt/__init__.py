@@ -55,6 +55,16 @@ from .modal_opt import (
     FrequencyConstrainedOptimizer,
 )
 
+from .tpms_lattice import (
+    TPMSType,
+    TPMSConfig,
+    evaluate_tpms_levelset,
+    density_to_levelset_threshold,
+    evaluate_graded_tpms_field,
+    generate_tpms_voxel_infill,
+    extract_tpms_isosurface,
+)
+
 __all__ = [
     "TopologyOptimizer",
     "TopologyConfig",
@@ -85,5 +95,12 @@ __all__ = [
     "FrequencyOptResult",
     "ModalSensitivityEvaluator",
     "FrequencyConstrainedOptimizer",
+    "TPMSType",
+    "TPMSConfig",
+    "evaluate_tpms_levelset",
+    "density_to_levelset_threshold",
+    "evaluate_graded_tpms_field",
+    "generate_tpms_voxel_infill",
+    "extract_tpms_isosurface",
 ]
 

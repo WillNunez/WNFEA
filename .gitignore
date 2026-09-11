@@ -20,3 +20,4 @@ graphify-out/
 results/*.vtu
 results/*.pvsm
 output/
+scratch/

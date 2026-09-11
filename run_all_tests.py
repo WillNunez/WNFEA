@@ -41,6 +41,7 @@ TEST_SUITES = [
     ("Dynamic Frequency Optimization & Harmonic FRF", [sys.executable, os.path.join("tests", "test_modal_opt_harmonic.py")]),
     ("Aero-Structural Fatigue Life & Cyclic Damage Engine", [sys.executable, os.path.join("tests", "test_fatigue_life.py")]),
     ("Aero-Structural Random Vibration & Spectral Fatigue", [sys.executable, os.path.join("tests", "test_random_vibration.py")]),
+    ("Functionally Graded TPMS & Microstructure Homogenization", [sys.executable, os.path.join("tests", "test_tpms_homogenization.py")]),
 ]
 
 
