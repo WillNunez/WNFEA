@@ -345,7 +345,7 @@
         <div class="bg-slate-900/80 border border-bordercol rounded p-2.5 flex flex-col justify-between">
           <span class="text-slate-400">3-Axis Machinability</span>
           <div class="flex items-baseline space-x-1">
-            <span class="text-lg font-bold text-emerald-400">100%</span>
+            <span id="metric-machinability" class="text-lg font-bold text-emerald-400">100%</span>
             <span class="text-slate-400 text-[11px]">Zero Undercuts</span>
           </div>
         </div>
@@ -820,6 +820,9 @@
         }
         if (data.compliance) {
           document.getElementById('metric-compliance').innerText = data.compliance.toFixed(4);
+        }
+        if (data.machinability !== undefined) {
+          document.getElementById('metric-machinability').innerText = `${data.machinability}%`;
         }
         activeCandidateBadge.innerText = `Active: Candidate ${id} (${data.name})`;
       } catch (e) {
