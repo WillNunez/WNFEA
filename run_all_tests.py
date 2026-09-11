@@ -44,6 +44,8 @@ TEST_SUITES = [
     ("Functionally Graded TPMS & Microstructure Homogenization", [sys.executable, os.path.join("tests", "test_tpms_homogenization.py")]),
     ("Non-Linear J2 Elasto-Plasticity & Isotropic Hardening", [sys.executable, os.path.join("tests", "test_elasto_plasticity.py")]),
     ("Total Lagrangian Large Deflection & Geometric Non-Linearity", [sys.executable, os.path.join("tests", "test_large_deflection.py")]),
+    ("Interactive Web GUI & Generative Studio Backend", [sys.executable, os.path.join("tests", "test_gui.py")]),
+    ("300mm Model Car Chassis 5g 6061 3-Axis Case Study", [sys.executable, os.path.join("tests", "test_model_car_chassis.py")]),
 ]
 
 

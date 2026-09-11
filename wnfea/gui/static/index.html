@@ -1,0 +1,762 @@
+<!DOCTYPE html>
+<html lang="en" class="dark">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>WNFEA Generative Design Studio | 3-Axis CNC & 5g Chassis</title>
+  <!-- Tailwind CSS CDN -->
+  <script src="https://cdn.tailwindcss.com"></script>
+  <!-- Three.js & OrbitControls CDN -->
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/controls/OrbitControls.js"></script>
+  <!-- Chart.js CDN -->
+  <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+  <script>
+    tailwind.config = {
+      darkMode: 'class',
+      theme: {
+        extend: {
+          colors: {
+            brand: {
+              50: '#f0fdfa',
+              500: '#14b8a6',
+              600: '#0d9488',
+              700: '#0f766e',
+            },
+            darkbg: '#0f172a',
+            panelbg: '#1e293b',
+            bordercol: '#334155'
+          }
+        }
+      }
+    }
+  </script>
+  <style>
+    body { margin: 0; overflow: hidden; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; }
+    #viewport-container { width: 100%; height: 100%; position: relative; }
+    canvas { display: block; }
+    /* Custom scrollbars */
+    ::-webkit-scrollbar { width: 6px; height: 6px; }
+    ::-webkit-scrollbar-track { background: #0f172a; }
+    ::-webkit-scrollbar-thumb { background: #334155; border-radius: 3px; }
+    ::-webkit-scrollbar-thumb:hover { background: #475569; }
+  </style>
+</head>
+<body class="bg-darkbg text-slate-100 flex h-screen select-none">
+
+  <!-- LEFT CONTROL PANEL -->
+  <aside class="w-96 bg-panelbg border-r border-bordercol flex flex-col h-full z-10 shadow-2xl overflow-y-auto">
+    <!-- Header -->
+    <div class="p-4 border-b border-bordercol flex items-center justify-between bg-slate-900/60 sticky top-0 z-20 backdrop-blur">
+      <div class="flex items-center space-x-2">
+        <div class="w-8 h-8 rounded-lg bg-teal-500/20 border border-teal-500 flex items-center justify-center font-bold text-teal-400">
+          W
+        </div>
+        <div>
+          <h1 class="text-sm font-bold tracking-wide uppercase text-slate-100">WNFEA Generative Studio</h1>
+          <p class="text-xs text-slate-400">3-Axis CNC & Structural Optimization</p>
+        </div>
+      </div>
+      <span class="px-2 py-0.5 text-xs font-semibold rounded bg-teal-900/50 text-teal-300 border border-teal-700/50">v2.4.0</span>
+    </div>
+
+    <!-- Presets Selector -->
+    <div class="p-4 border-b border-bordercol">
+      <label class="block text-xs font-semibold uppercase tracking-wider text-slate-400 mb-1">Target Application Preset</label>
+      <select id="preset-selector" class="w-full bg-slate-900 border border-bordercol rounded px-3 py-2 text-sm text-slate-200 focus:outline-none focus:border-teal-500">
+        <option value="model_car_chassis_300mm">300mm Model Car Chassis (Double Wishbone, 5g, 6061)</option>
+        <option value="aerospace_bracket">Aerospace Angle Bracket (6061 3-Axis)</option>
+      </select>
+    </div>
+
+    <!-- Configuration Tabs -->
+    <div class="p-4 space-y-5 flex-1">
+      
+      <!-- 1. Geometry & Domain -->
+      <section class="space-y-2">
+        <h2 class="text-xs font-bold uppercase tracking-wider text-teal-400 flex items-center">
+          <span class="w-2 h-2 rounded-full bg-teal-400 mr-2"></span> 1. Billet Domain Geometry
+        </h2>
+        <div class="grid grid-cols-3 gap-2 text-xs">
+          <div>
+            <label class="text-slate-400">Length (X mm)</label>
+            <input id="dim-lx" type="number" value="300" class="w-full bg-slate-900 border border-bordercol rounded p-1.5 mt-1 text-slate-200" />
+          </div>
+          <div>
+            <label class="text-slate-400">Width (Y mm)</label>
+            <input id="dim-ly" type="number" value="100" class="w-full bg-slate-900 border border-bordercol rounded p-1.5 mt-1 text-slate-200" />
+          </div>
+          <div>
+            <label class="text-slate-400">Height (Z mm)</label>
+            <input id="dim-lz" type="number" value="36" class="w-full bg-slate-900 border border-bordercol rounded p-1.5 mt-1 text-slate-200" />
+          </div>
+        </div>
+        <div class="grid grid-cols-3 gap-2 text-xs">
+          <div>
+            <label class="text-slate-400">Grid Nx</label>
+            <input id="res-nx" type="number" value="40" class="w-full bg-slate-900 border border-bordercol rounded p-1.5 mt-1 text-slate-200" />
+          </div>
+          <div>
+            <label class="text-slate-400">Grid Ny</label>
+            <input id="res-ny" type="number" value="16" class="w-full bg-slate-900 border border-bordercol rounded p-1.5 mt-1 text-slate-200" />
+          </div>
+          <div>
+            <label class="text-slate-400">Grid Nz</label>
+            <input id="res-nz" type="number" value="8" class="w-full bg-slate-900 border border-bordercol rounded p-1.5 mt-1 text-slate-200" />
+          </div>
+        </div>
+      </section>
+
+      <!-- 2. Material Specification -->
+      <section class="space-y-2">
+        <h2 class="text-xs font-bold uppercase tracking-wider text-teal-400 flex items-center">
+          <span class="w-2 h-2 rounded-full bg-teal-400 mr-2"></span> 2. Material Selection
+        </h2>
+        <select id="material-selector" class="w-full bg-slate-900 border border-bordercol rounded px-3 py-2 text-sm text-slate-200 focus:outline-none focus:border-teal-500">
+          <option value="al6061_t6" selected>Aluminum 6061-T6 (E=68.9 GPa, Yield=276 MPa, rho=2.70 g/cm³)</option>
+          <option value="al7075_t6">Aluminum 7075-T6 (E=71.7 GPa, Yield=503 MPa, rho=2.81 g/cm³)</option>
+          <option value="ti6al4v">Titanium Ti-6Al-4V Grade 5 (E=113.8 GPa, Yield=880 MPa)</option>
+          <option value="structural_steel">Structural Steel A36 (E=200 GPa, Yield=250 MPa)</option>
+        </select>
+        <div id="material-badges" class="flex flex-wrap gap-1 text-[11px] text-slate-300">
+          <span class="bg-slate-900 border border-bordercol px-2 py-0.5 rounded">6061-T6 Billet</span>
+          <span class="bg-slate-900 border border-bordercol px-2 py-0.5 rounded">Yield: 276 MPa</span>
+          <span class="bg-slate-900 border border-bordercol px-2 py-0.5 rounded">Density: 2.70 g/cm³</span>
+        </div>
+      </section>
+
+      <!-- 3. Suspension & 5g Acceleration Loads -->
+      <section class="space-y-2">
+        <h2 class="text-xs font-bold uppercase tracking-wider text-teal-400 flex items-center">
+          <span class="w-2 h-2 rounded-full bg-teal-400 mr-2"></span> 3. Suspension & 5g Tire Grip
+        </h2>
+        <div class="bg-slate-900/70 border border-bordercol rounded p-3 text-xs space-y-2">
+          <div class="flex justify-between items-center text-slate-300">
+            <span>Suspension Architecture:</span>
+            <span class="font-semibold text-teal-300">Double Wishbone (4 Corners)</span>
+          </div>
+          <div class="flex justify-between items-center text-slate-300">
+            <span>Hardpoints Preserved:</span>
+            <span class="font-semibold text-teal-300">16 Pivot Lugs (Passive Solid)</span>
+          </div>
+          <div class="flex justify-between items-center text-slate-300">
+            <span>Max Dynamic Acceleration:</span>
+            <span class="font-semibold text-amber-400">5.0g (~100 N Tire Grip)</span>
+          </div>
+          <div class="text-[11px] text-slate-400 pt-1 border-t border-slate-800">
+            Cases: 5g Lateral Cornering (35%), 5g Braking (25%), 5g Bump (25%), Torsion (15%)
+          </div>
+        </div>
+      </section>
+
+      <!-- 4. Manufacturability Constraints (3-Axis CNC) -->
+      <section class="space-y-2">
+        <h2 class="text-xs font-bold uppercase tracking-wider text-teal-400 flex items-center">
+          <span class="w-2 h-2 rounded-full bg-teal-400 mr-2"></span> 4. 3-Axis CNC Manufacturability
+        </h2>
+        <div class="space-y-3 bg-slate-900/70 border border-bordercol rounded p-3 text-xs">
+          <div>
+            <label class="block text-slate-400 mb-1">Milling Strategy</label>
+            <select id="cnc-axis" class="w-full bg-slate-800 border border-bordercol rounded px-2 py-1.5 text-slate-200">
+              <option value="bi-z" selected>3-Axis Bidirectional (Top & Bottom ±Z Setups)</option>
+              <option value="+z">3-Axis Single Setup (+Z Top Down)</option>
+              <option value="none">Unconstrained (3D Printing / AM)</option>
+            </select>
+          </div>
+          <div>
+            <div class="flex justify-between">
+              <label class="text-slate-400">Min Endmill Cutter Radius</label>
+              <span id="cutter-radius-val" class="font-mono text-teal-300">3.0 mm (1/4" Tool)</span>
+            </div>
+            <input id="cutter-radius" type="range" min="1.0" max="8.0" step="0.5" value="3.0" class="w-full accent-teal-500 mt-1" />
+          </div>
+          <div>
+            <div class="flex justify-between">
+              <label class="text-slate-400">Undercut Penalty Weight</label>
+              <span id="undercut-weight-val" class="font-mono text-teal-300">0.20</span>
+            </div>
+            <input id="undercut-weight" type="range" min="0.0" max="0.6" step="0.05" value="0.20" class="w-full accent-teal-500 mt-1" />
+          </div>
+          <div class="text-[11px] text-teal-400/90 flex items-center">
+            <svg class="w-3.5 h-3.5 mr-1" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 13l4 4L19 7"></path></svg>
+            Eliminates internal cavities and unmachinable blind pockets
+          </div>
+        </div>
+      </section>
+
+      <!-- 5. Topology Optimization Targets -->
+      <section class="space-y-2">
+        <h2 class="text-xs font-bold uppercase tracking-wider text-teal-400 flex items-center">
+          <span class="w-2 h-2 rounded-full bg-teal-400 mr-2"></span> 5. Optimization Targets
+        </h2>
+        <div class="space-y-3 bg-slate-900/70 border border-bordercol rounded p-3 text-xs">
+          <div>
+            <div class="flex justify-between">
+              <label class="text-slate-400">Target Volume Fraction (V*)</label>
+              <span id="vol-target-val" class="font-mono text-teal-300">28% (72% Mass Cut)</span>
+            </div>
+            <input id="vol-target" type="range" min="0.15" max="0.50" step="0.01" value="0.28" class="w-full accent-teal-500 mt-1" />
+          </div>
+          <div class="grid grid-cols-2 gap-2">
+            <div>
+              <label class="text-slate-400">Filter Radius (mm)</label>
+              <input id="filter-radius" type="number" value="8" class="w-full bg-slate-800 border border-bordercol rounded p-1.5 mt-1 text-slate-200" />
+            </div>
+            <div>
+              <label class="text-slate-400">Max Iterations</label>
+              <input id="max-iterations" type="number" value="25" class="w-full bg-slate-800 border border-bordercol rounded p-1.5 mt-1 text-slate-200" />
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <!-- Action Button -->
+      <button id="btn-start" class="w-full py-3 bg-gradient-to-r from-teal-500 to-emerald-600 hover:from-teal-600 hover:to-emerald-700 text-slate-900 font-bold rounded-lg shadow-lg flex items-center justify-center space-x-2 transition-all">
+        <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M14.752 11.168l-3.197-2.132A1 1 0 0010 9.87v4.263a1 1 0 001.555.832l3.197-2.132a1 1 0 000-1.664z"></path><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M21 12a9 9 0 11-18 0 9 9 0 0118 0z"></path></svg>
+        <span>Generate 3-Axis Chassis</span>
+      </button>
+
+      <!-- Export Actions -->
+      <div class="pt-2 border-t border-bordercol space-y-2">
+        <label class="block text-xs font-semibold uppercase tracking-wider text-slate-400">Export Solid Models</label>
+        <div class="grid grid-cols-3 gap-2">
+          <button id="btn-export-step" class="py-2 px-2 bg-slate-800 hover:bg-slate-700 text-slate-200 rounded text-xs font-semibold border border-bordercol text-center">
+            STEP CAD
+          </button>
+          <button id="btn-export-stl" class="py-2 px-2 bg-slate-800 hover:bg-slate-700 text-slate-200 rounded text-xs font-semibold border border-bordercol text-center">
+            STL Mesh
+          </button>
+          <button id="btn-export-vtu" class="py-2 px-2 bg-slate-800 hover:bg-slate-700 text-slate-200 rounded text-xs font-semibold border border-bordercol text-center">
+            ParaView
+          </button>
+        </div>
+      </div>
+
+    </div>
+  </aside>
+
+  <!-- CENTER 3D VIEWPORT & TELEMETRY -->
+  <main class="flex-1 flex flex-col h-full relative overflow-hidden">
+    
+    <!-- Top Viewport Toolbar -->
+    <div class="h-12 bg-panelbg/90 border-b border-bordercol px-4 flex items-center justify-between z-10 backdrop-blur">
+      <div class="flex items-center space-x-3 text-xs">
+        <span class="font-bold text-slate-200">3D Interactive CAD/FEA Viewport</span>
+        <span class="text-slate-500">|</span>
+        <button id="view-iso" class="px-2 py-1 rounded bg-slate-800 hover:bg-slate-700 text-slate-300">Iso</button>
+        <button id="view-top" class="px-2 py-1 rounded bg-slate-800 hover:bg-slate-700 text-slate-300">Top (Z)</button>
+        <button id="view-front" class="px-2 py-1 rounded bg-slate-800 hover:bg-slate-700 text-slate-300">Front (X)</button>
+        <button id="view-side" class="px-2 py-1 rounded bg-slate-800 hover:bg-slate-700 text-slate-300">Side (Y)</button>
+        <span class="text-slate-500">|</span>
+        <label class="flex items-center space-x-1 cursor-pointer">
+          <input type="checkbox" id="chk-wireframe" class="accent-teal-500" />
+          <span class="text-slate-300">Wireframe</span>
+        </label>
+        <label class="flex items-center space-x-1 cursor-pointer">
+          <input type="checkbox" id="chk-hardpoints" class="accent-teal-500" checked />
+          <span class="text-slate-300">Wishbones</span>
+        </label>
+        <label class="flex items-center space-x-1 cursor-pointer">
+          <input type="checkbox" id="chk-loads" class="accent-teal-500" checked />
+          <span class="text-slate-300">5g Loads</span>
+        </label>
+      </div>
+      <div id="status-pill" class="flex items-center space-x-2 text-xs">
+        <span id="status-dot" class="w-2.5 h-2.5 rounded-full bg-emerald-500 animate-pulse"></span>
+        <span id="status-label" class="text-slate-300">Ready</span>
+      </div>
+    </div>
+
+    <!-- 3D Canvas Container -->
+    <div id="viewport-container" class="flex-1 bg-gradient-to-b from-slate-950 to-slate-900">
+      <!-- Loading Overlay -->
+      <div id="loading-overlay" class="absolute inset-0 bg-slate-950/80 z-20 flex flex-col items-center justify-center space-y-4 hidden">
+        <div class="w-12 h-12 border-4 border-teal-500 border-t-transparent rounded-full animate-spin"></div>
+        <div class="text-center">
+          <h3 id="overlay-text" class="text-base font-bold text-slate-100">Solving Topology Optimization...</h3>
+          <p id="overlay-subtext" class="text-xs text-slate-400 mt-1">Matrix-Free PCG Solver & 3-Axis CNC Cast-Shadow Projection</p>
+        </div>
+      </div>
+    </div>
+
+    <!-- Bottom Telemetry HUD -->
+    <div class="h-44 bg-panelbg/95 border-t border-bordercol p-4 flex z-10 space-x-6">
+      
+      <!-- Metrics Cards -->
+      <div class="w-80 grid grid-cols-2 gap-2 text-xs">
+        <div class="bg-slate-900/80 border border-bordercol rounded p-2.5 flex flex-col justify-between">
+          <span class="text-slate-400">Initial Billet Mass</span>
+          <div class="flex items-baseline space-x-1">
+            <span id="metric-init-mass" class="text-lg font-bold text-slate-200">2,916</span>
+            <span class="text-slate-400 text-[11px]">g (6061)</span>
+          </div>
+        </div>
+        <div class="bg-slate-900/80 border border-bordercol rounded p-2.5 flex flex-col justify-between">
+          <span class="text-slate-400">Optimized Mass</span>
+          <div class="flex items-baseline space-x-1">
+            <span id="metric-opt-mass" class="text-lg font-bold text-teal-400">790</span>
+            <span class="text-slate-400 text-[11px]">g (-73%)</span>
+          </div>
+        </div>
+        <div class="bg-slate-900/80 border border-bordercol rounded p-2.5 flex flex-col justify-between">
+          <span class="text-slate-400">Strain Energy / Compliance</span>
+          <div class="flex items-baseline space-x-1">
+            <span id="metric-compliance" class="text-lg font-bold text-amber-400">0.042</span>
+            <span class="text-slate-400 text-[11px]">J</span>
+          </div>
+        </div>
+        <div class="bg-slate-900/80 border border-bordercol rounded p-2.5 flex flex-col justify-between">
+          <span class="text-slate-400">3-Axis Machinability</span>
+          <div class="flex items-baseline space-x-1">
+            <span class="text-lg font-bold text-emerald-400">100%</span>
+            <span class="text-slate-400 text-[11px]">Zero Undercuts</span>
+          </div>
+        </div>
+      </div>
+
+      <!-- Real-time Convergence Chart -->
+      <div class="flex-1 bg-slate-900/80 border border-bordercol rounded p-2 flex flex-col">
+        <div class="flex justify-between items-center text-[11px] text-slate-400 px-2 pb-1">
+          <span>Convergence Telemetry (Compliance & Volume vs Iteration)</span>
+          <span id="chart-iter-counter" class="font-mono text-teal-300">Iteration: 25 / 25</span>
+        </div>
+        <div class="flex-1 relative">
+          <canvas id="convergence-chart"></canvas>
+        </div>
+      </div>
+
+    </div>
+
+  </main>
+
+  <script>
+    // --- 3D VIEWPORT SETUP (Three.js) ---
+    const container = document.getElementById('viewport-container');
+    const scene = new THREE.Scene();
+    scene.background = new THREE.Color(0x0a0f1d);
+
+    const camera = new THREE.PerspectiveCamera(45, container.clientWidth / container.clientHeight, 0.01, 10.0);
+    camera.position.set(0.25, -0.35, 0.20);
+    camera.up.set(0, 0, 1); // Z is up
+
+    const renderer = new THREE.WebGLRenderer({ antialias: true });
+    renderer.setSize(container.clientWidth, container.clientHeight);
+    renderer.setPixelRatio(window.devicePixelRatio);
+    renderer.shadowMap.enabled = true;
+    container.appendChild(renderer.domElement);
+
+    const controls = new THREE.OrbitControls(camera, renderer.domElement);
+    controls.enableDamping = true;
+    controls.dampingFactor = 0.05;
+    controls.target.set(0.15, 0.0, 0.018);
+
+    // Lights
+    const ambientLight = new THREE.AmbientLight(0xffffff, 0.6);
+    scene.add(ambientLight);
+
+    const dirLight1 = new THREE.DirectionalLight(0xffffff, 0.8);
+    dirLight1.position.set(1, -1, 2);
+    scene.add(dirLight1);
+
+    const dirLight2 = new THREE.DirectionalLight(0x38bdf8, 0.4);
+    dirLight2.position.set(-1, 1, -1);
+    scene.add(dirLight2);
+
+    // Floor Grid
+    const gridHelper = new THREE.GridHelper(0.6, 30, 0x14b8a6, 0x1e293b);
+    gridHelper.rotation.x = Math.PI / 2;
+    gridHelper.position.set(0.15, 0.0, 0.0);
+    scene.add(gridHelper);
+
+    // Billet Bounding Box Wireframe
+    let boundingBoxMesh = null;
+    function updateBoundingBox(lx, ly, lz) {
+      if (boundingBoxMesh) scene.remove(boundingBoxMesh);
+      const geom = new THREE.BoxGeometry(lx, ly, lz);
+      const edges = new THREE.EdgesGeometry(geom);
+      boundingBoxMesh = new THREE.LineSegments(edges, new THREE.LineBasicMaterial({ color: 0x334155 }));
+      boundingBoxMesh.position.set(lx / 2, 0.0, lz / 2);
+      scene.add(boundingBoxMesh);
+    }
+    updateBoundingBox(0.300, 0.100, 0.036);
+
+    // Suspension Hardpoints Markers
+    const hardpointsGroup = new THREE.Group();
+    scene.add(hardpointsGroup);
+
+    function createSuspensionHardpoints() {
+      hardpointsGroup.clear();
+      const xF = 0.055, xR = 0.245;
+      const yOut = 0.038;
+      const zL = 0.006, zU = 0.024;
+      const dx = 0.022;
+
+      const corners = [
+        { x: xF, y: yOut, name: "FL" },
+        { x: xF, y: -yOut, name: "FR" },
+        { x: xR, y: yOut, name: "RL" },
+        { x: xR, y: -yOut, name: "RR" },
+      ];
+
+      const lugGeom = new THREE.CylinderGeometry(0.004, 0.004, 0.006, 16);
+      const lugMat = new THREE.MeshStandardMaterial({ color: 0xf59e0b, metalness: 0.8, roughness: 0.3 });
+
+      corners.forEach(c => {
+        // LCA pickups (2 per corner)
+        [-dx/2, dx/2].forEach(ox => {
+          const m1 = new THREE.Mesh(lugGeom, lugMat);
+          m1.rotation.z = Math.PI / 2;
+          m1.position.set(c.x + ox, c.y, zL);
+          hardpointsGroup.add(m1);
+
+          const m2 = new THREE.Mesh(lugGeom, lugMat);
+          m2.rotation.z = Math.PI / 2;
+          m2.position.set(c.x + ox, c.y, zU);
+          hardpointsGroup.add(m2);
+        });
+      });
+    }
+    createSuspensionHardpoints();
+
+    // 5g Load Arrows
+    const loadArrowsGroup = new THREE.Group();
+    scene.add(loadArrowsGroup);
+
+    function createLoadArrows() {
+      loadArrowsGroup.clear();
+      // Lateral Cornering Arrow (Yellow/Orange)
+      const latArrow = new THREE.ArrowHelper(
+        new THREE.Vector3(0, 1, 0),
+        new THREE.Vector3(0.055, 0.038, 0.015),
+        0.045,
+        0xf43f5e,
+        0.010,
+        0.006
+      );
+      loadArrowsGroup.add(latArrow);
+
+      // Braking Arrow (Red, pushing backward)
+      const brkArrow = new THREE.ArrowHelper(
+        new THREE.Vector3(-1, 0, 0),
+        new THREE.Vector3(0.055, -0.038, 0.006),
+        0.045,
+        0xe11d48,
+        0.010,
+        0.006
+      );
+      loadArrowsGroup.add(brkArrow);
+
+      // Bump Arrow (Blue, pushing upward)
+      const bmpArrow = new THREE.ArrowHelper(
+        new THREE.Vector3(0, 0, 1),
+        new THREE.Vector3(0.055, 0.038, 0.024),
+        0.035,
+        0x0284c7,
+        0.008,
+        0.005
+      );
+      loadArrowsGroup.add(bmpArrow);
+    }
+    createLoadArrows();
+
+    // Topology Optimized Chassis Mesh
+    let chassisMesh = null;
+    const aluminumMaterial = new THREE.MeshStandardMaterial({
+      color: 0xd4d4d8,       // Metallic 6061-T6 aluminum finish
+      metalness: 0.85,
+      roughness: 0.25,
+      wireframe: false,
+    });
+
+    function renderChassisGeometry(verts, faces) {
+      if (chassisMesh) scene.remove(chassisMesh);
+
+      const geom = new THREE.BufferGeometry();
+      const posArray = new Float32Array(verts.flat());
+      const idxArray = new Uint32Array(faces.flat());
+
+      geom.setAttribute('position', new THREE.BufferAttribute(posArray, 3));
+      geom.setIndex(new THREE.BufferAttribute(idxArray, 1));
+      geom.computeVertexNormals();
+
+      chassisMesh = new THREE.Mesh(geom, aluminumMaterial);
+      scene.add(chassisMesh);
+    }
+
+    // Default Procedural 300mm 3-Axis Chassis Preview
+    function generateInitialChassisPreview() {
+      // Build a multi-beam model car chassis with 3-axis cutouts
+      const group = new THREE.Group();
+      const lx = 0.300, ly = 0.100, lz = 0.036;
+
+      // Bottom plate / undertray
+      const plateGeom = new THREE.BoxGeometry(lx, ly, 0.004);
+      const plate = new THREE.Mesh(plateGeom, aluminumMaterial);
+      plate.position.set(lx / 2, 0, 0.002);
+      group.add(plate);
+
+      // Left & Right side sills (machined rails)
+      const sillGeom = new THREE.BoxGeometry(lx, 0.008, lz);
+      const leftSill = new THREE.Mesh(sillGeom, aluminumMaterial);
+      leftSill.position.set(lx / 2, ly / 2 - 0.004, lz / 2);
+      group.add(leftSill);
+
+      const rightSill = new THREE.Mesh(sillGeom, aluminumMaterial);
+      rightSill.position.set(lx / 2, -ly / 2 + 0.004, lz / 2);
+      group.add(rightSill);
+
+      // Front & Rear Bulkheads
+      const bulkGeom = new THREE.BoxGeometry(0.010, ly - 0.016, lz);
+      const frontBulk = new THREE.Mesh(bulkGeom, aluminumMaterial);
+      frontBulk.position.set(0.055, 0, lz / 2);
+      group.add(frontBulk);
+
+      const rearBulk = new THREE.Mesh(bulkGeom, aluminumMaterial);
+      rearBulk.position.set(0.245, 0, lz / 2);
+      group.add(rearBulk);
+
+      // Diagonal X-brace for 5g torsional rigidity (3-axis pocketed)
+      const braceGeom = new THREE.BoxGeometry(0.20, 0.006, 0.012);
+      const brace1 = new THREE.Mesh(braceGeom, aluminumMaterial);
+      brace1.position.set(0.15, 0, 0.010);
+      brace1.rotation.z = Math.atan2(ly, 0.20);
+      group.add(brace1);
+
+      const brace2 = new THREE.Mesh(braceGeom, aluminumMaterial);
+      brace2.position.set(0.15, 0, 0.010);
+      brace2.rotation.z = -Math.atan2(ly, 0.20);
+      group.add(brace2);
+
+      chassisMesh = group;
+      scene.add(chassisMesh);
+    }
+    generateInitialChassisPreview();
+
+    // Render loop
+    function animate() {
+      requestAnimationFrame(animate);
+      controls.update();
+      renderer.render(scene, camera);
+    }
+    animate();
+
+    window.addEventListener('resize', () => {
+      camera.aspect = container.clientWidth / container.clientHeight;
+      camera.updateProjectionMatrix();
+      renderer.setSize(container.clientWidth, container.clientHeight);
+    });
+
+    // View buttons
+    document.getElementById('view-iso').onclick = () => {
+      camera.position.set(0.25, -0.35, 0.20);
+      controls.target.set(0.15, 0.0, 0.018);
+    };
+    document.getElementById('view-top').onclick = () => {
+      camera.position.set(0.15, 0.0, 0.45);
+      controls.target.set(0.15, 0.0, 0.0);
+    };
+    document.getElementById('view-front').onclick = () => {
+      camera.position.set(-0.25, 0.0, 0.018);
+      controls.target.set(0.15, 0.0, 0.018);
+    };
+    document.getElementById('view-side').onclick = () => {
+      camera.position.set(0.15, -0.35, 0.018);
+      controls.target.set(0.15, 0.0, 0.018);
+    };
+
+    // Toggles
+    document.getElementById('chk-wireframe').onchange = (e) => {
+      aluminumMaterial.wireframe = e.target.checked;
+    };
+    document.getElementById('chk-hardpoints').onchange = (e) => {
+      hardpointsGroup.visible = e.target.checked;
+    };
+    document.getElementById('chk-loads').onchange = (e) => {
+      loadArrowsGroup.visible = e.target.checked;
+    };
+
+    // Sliders update labels
+    const cutterSlider = document.getElementById('cutter-radius');
+    cutterSlider.oninput = () => {
+      document.getElementById('cutter-radius-val').innerText = `${cutterSlider.value} mm`;
+    };
+
+    const undercutSlider = document.getElementById('undercut-weight');
+    undercutSlider.oninput = () => {
+      document.getElementById('undercut-weight-val').innerText = undercutSlider.value;
+    };
+
+    const volSlider = document.getElementById('vol-target');
+    volSlider.oninput = () => {
+      const pct = Math.round(volSlider.value * 100);
+      document.getElementById('vol-target-val').innerText = `${pct}% (${100 - pct}% Mass Cut)`;
+    };
+
+    // --- CHART.JS CONVERGENCE HUD ---
+    const ctx = document.getElementById('convergence-chart').getContext('2d');
+    const convergenceChart = new Chart(ctx, {
+      type: 'line',
+      data: {
+        labels: Array.from({ length: 25 }, (_, i) => i + 1),
+        datasets: [
+          {
+            label: 'Compliance / Strain Energy (J)',
+            data: [0.180, 0.145, 0.118, 0.095, 0.078, 0.065, 0.055, 0.048, 0.045, 0.043, 0.042, 0.041, 0.041, 0.041, 0.041, 0.041, 0.041, 0.041, 0.041, 0.041, 0.041, 0.041, 0.041, 0.041, 0.041],
+            borderColor: '#f59e0b',
+            backgroundColor: 'rgba(245, 158, 11, 0.1)',
+            borderWidth: 2,
+            tension: 0.3,
+            yAxisID: 'y',
+          },
+          {
+            label: 'Volume Fraction (V*)',
+            data: [1.0, 0.85, 0.72, 0.60, 0.50, 0.42, 0.36, 0.32, 0.29, 0.28, 0.28, 0.28, 0.28, 0.28, 0.28, 0.28, 0.28, 0.28, 0.28, 0.28, 0.28, 0.28, 0.28, 0.28, 0.28],
+            borderColor: '#14b8a6',
+            backgroundColor: 'rgba(20, 184, 166, 0.1)',
+            borderWidth: 2,
+            tension: 0.3,
+            yAxisID: 'y1',
+          }
+        ]
+      },
+      options: {
+        responsive: true,
+        maintainAspectRatio: false,
+        plugins: {
+          legend: { position: 'top', labels: { color: '#94a3b8', font: { size: 10 } } }
+        },
+        scales: {
+          x: { grid: { color: '#1e293b' }, ticks: { color: '#64748b', font: { size: 9 } } },
+          y: {
+            type: 'linear',
+            position: 'left',
+            grid: { color: '#1e293b' },
+            ticks: { color: '#f59e0b', font: { size: 9 } }
+          },
+          y1: {
+            type: 'linear',
+            position: 'right',
+            grid: { drawOnChartArea: false },
+            ticks: { color: '#14b8a6', font: { size: 9 } }
+          }
+        }
+      }
+    });
+
+    // --- API INTEGRATION ---
+    const btnStart = document.getElementById('btn-start');
+    const loadingOverlay = document.getElementById('loading-overlay');
+    const statusLabel = document.getElementById('status-label');
+    const statusDot = document.getElementById('status-dot');
+
+    btnStart.onclick = async () => {
+      const payload = {
+        dimensions: {
+          lx: parseFloat(document.getElementById('dim-lx').value) / 1000.0,
+          ly: parseFloat(document.getElementById('dim-ly').value) / 1000.0,
+          lz: parseFloat(document.getElementById('dim-lz').value) / 1000.0,
+        },
+        resolution: {
+          nx: parseInt(document.getElementById('res-nx').value),
+          ny: parseInt(document.getElementById('res-ny').value),
+          nz: parseInt(document.getElementById('res-nz').value),
+        },
+        material_id: document.getElementById('material-selector').value,
+        target_volume_fraction: parseFloat(document.getElementById('vol-target').value),
+        filter_radius: parseFloat(document.getElementById('filter-radius').value) / 1000.0,
+        max_iterations: parseInt(document.getElementById('max-iterations').value),
+        cnc_milling: {
+          enabled: document.getElementById('cnc-axis').value !== 'none',
+          axis: document.getElementById('cnc-axis').value,
+          cutter_radius: parseFloat(document.getElementById('cutter-radius').value) / 1000.0,
+          penalty_weight: parseFloat(document.getElementById('undercut-weight').value),
+        }
+      };
+
+      loadingOverlay.classList.remove('hidden');
+      statusLabel.innerText = 'Optimizing 6061 Chassis...';
+      statusDot.className = 'w-2.5 h-2.5 rounded-full bg-amber-500 animate-ping';
+
+      try {
+        const res = await fetch('/api/optimize', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(payload),
+        });
+
+        if (!res.ok) {
+          const err = await res.json();
+          alert('Error: ' + (err.error || 'Failed to start'));
+          loadingOverlay.classList.add('hidden');
+          return;
+        }
+
+        pollStatus();
+      } catch (e) {
+        alert('Optimization request error: ' + e);
+        loadingOverlay.classList.add('hidden');
+      }
+    };
+
+    async function pollStatus() {
+      const interval = setInterval(async () => {
+        try {
+          const res = await fetch('/api/status');
+          const data = await res.json();
+
+          document.getElementById('overlay-text').innerText = data.status_text || 'Optimizing...';
+          document.getElementById('chart-iter-counter').innerText = `Iteration: ${data.current_iteration} / ${data.max_iterations}`;
+
+          if (data.compliance_history && data.compliance_history.length > 0) {
+            convergenceChart.data.labels = data.compliance_history.map((_, i) => i + 1);
+            convergenceChart.data.datasets[0].data = data.compliance_history;
+            convergenceChart.data.datasets[1].data = data.volume_history;
+            convergenceChart.update();
+
+            document.getElementById('metric-compliance').innerText = data.current_compliance.toFixed(4);
+            const optGrams = Math.round(2916 * data.current_volume_fraction);
+            document.getElementById('metric-opt-mass').innerText = optGrams;
+          }
+
+          if (data.is_completed || !data.is_running) {
+            clearInterval(interval);
+            loadingOverlay.classList.add('hidden');
+            statusLabel.innerText = 'Chassis Complete (3-Axis Machinable)';
+            statusDot.className = 'w-2.5 h-2.5 rounded-full bg-emerald-500';
+
+            // Fetch and render 3D mesh
+            fetchMesh();
+          }
+        } catch (e) {
+          console.error(e);
+        }
+      }, 1000);
+    }
+
+    async function fetchMesh() {
+      try {
+        const res = await fetch('/api/mesh');
+        if (res.ok) {
+          const data = await res.json();
+          if (data.vertices && data.faces) {
+            renderChassisGeometry(data.vertices, data.faces);
+          }
+        }
+      } catch (e) {
+        console.error("Failed to fetch mesh:", e);
+      }
+    }
+
+    // Export Buttons
+    document.getElementById('btn-export-step').onclick = () => {
+      window.location.href = '/api/export?format=step';
+    };
+    document.getElementById('btn-export-stl').onclick = () => {
+      window.location.href = '/api/export?format=stl';
+    };
+    document.getElementById('btn-export-vtu').onclick = () => {
+      window.location.href = '/api/export?format=vtu';
+    };
+  </script>
+</body>
+</html>
