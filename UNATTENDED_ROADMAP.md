@@ -191,21 +191,10 @@ This document is the persistent execution backlog for autonomous development of 
 
 ---
 
-### Phase 10: Steady-State & Transient Thermal-Structural Multi-Physics Engine
-- [x] **Task 10.1: Matrix-Free Thermal Conduction Operator**
-  - **Objective**: Implement `wnfea/solver/thermal_solver.py` evaluating steady-state thermal conductivity $\nabla \cdot (k \nabla T) + Q = 0$ on Cartesian Hex8 voxel domains with convection (Robin) and flux (Neumann) BCs.
-  - **Acceptance Criteria**: Solves 3D temperature fields in <5 ms with exact parity vs analytical 1D/3D heat transfer solutions.
-  - **Verification**: `python run_all_tests.py`. (PASSED - <1 ms solve, exact 1D/parabolic parity < 1e-10 error)
-
-- [x] **Task 10.2: One-Way Coupled Thermo-Mechanical Thermal Strain Engine**
-  - **Objective**: Formulate thermal expansion body load vector $\mathbf{f}_{th} = \int \mathbf{B}^T \mathbf{D} \boldsymbol{\epsilon}_{th} d\Omega$ with $\boldsymbol{\epsilon}_{th} = \alpha (T - T_0) \mathbf{I}$, feeding temperature solutions directly into matrix-free mechanical solvers.
-  - **Acceptance Criteria**: Exact thermal stress parity $\sigma_{th} = E \alpha \Delta T / (1 - 2\nu)$ under fully constrained boundary conditions (< 1e-10 relative error).
-  - **Verification**: `python run_all_tests.py`. (PASSED - exact hydrostatic stress parity 0.0 rel error, zero-stress unconstrained expansion)
-
-- [x] **Task 10.3: Verification Suite & Aerospace Thermal-Stress Benchmark**
-  - **Objective**: Implement `tests/test_thermal_structural.py` testing the complete thermal-mechanical coupled pipeline and extending ParaView exporter with thermal gradient contours.
-  - **Acceptance Criteria**: 100% pass rate in verification harness.
-  - **Verification**: `python run_all_tests.py`. (PASSED - 20/20 test suites pass 100% in 13.99s)
+### Phase 10: Steady-State & Transient Thermal-Structural Multi-Physics Engine [SKIPPED per user steering]
+- [x] **Task 10.1: Matrix-Free Thermal Conduction Operator** (SKIPPED)
+- [x] **Task 10.2: One-Way Coupled Thermo-Mechanical Thermal Strain Engine** (SKIPPED)
+- [x] **Task 10.3: Verification Suite & Aerospace Thermal-Stress Benchmark** (SKIPPED - excluded from test harness per user steering: "Dont need thermal mechanical yet")
 
 ---
 
@@ -353,21 +342,10 @@ This document is the persistent execution backlog for autonomous development of 
 
 ---
 
-### Phase 19: Aero-Structural Random Vibration (PSD) & Dirlik Spectral Fatigue Engine
-- [x] **Task 19.1: Matrix-Free Random Vibration (PSD) Response Solver**
-  - **Objective**: Implement `wnfea/solver/random_vibration.py` formulating modal frequency response acceleration and displacement Power Spectral Density (PSD) under base acceleration $S_{\ddot{u}_g}(\omega)$ ($g^2/\text{Hz}$) and acoustic pressure fields. Evaluate spectral moments $m_0, m_1, m_2, m_4$, root-mean-square stress $\sigma_{RMS} = \sqrt{m_0}$, zero-crossing frequency $E[0]$, and peak rate $E[P]$.
-  - **Acceptance Criteria**: Exact response PSD and RMS acceleration parity vs analytical SDOF Miles equation ($g_{RMS} = \sqrt{\frac{\pi}{2} f_n Q \cdot PSD(f_n)}$) and 100x speedup over time-domain Monte Carlo integration.
-  - **Verification**: `python run_all_tests.py`. (PASSED - exact Miles equation match to 0.075%, H_a(0) = 1.0 static limit verified)
-
-- [x] **Task 19.2: Frequency-Domain Spectral Fatigue Damage Models (Dirlik & Steinberg)**
-  - **Objective**: Implement `wnfea/fatigue/spectral_fatigue.py` formulating Steinberg 3-band Gaussian stress distribution ($1\sigma, 2\sigma, 3\sigma$) and Dirlik's four-moment probability density function $p(S)$ for broadband random stress histories. Compute expected fatigue damage rate $\mathbb{E}[D] = \int_0^\infty \frac{E[P] p(S)}{N(S)} dS$ directly from spectral moments without time-domain realization.
-  - **Acceptance Criteria**: Dirlik damage rate matches Rainflow cycle counting on synthetic Gaussian random time series to $< 5\%$; Steinberg 3-band evaluation executes in $< 1\text{ ms}$ per element.
-  - **Verification**: `python run_all_tests.py`. (PASSED - closed-form Gamma formula matches numerical quadrature to < 1e-5)
-
-- [x] **Task 19.3: Random Vibration Verification Suite & Aerospace Launch Vehicle Benchmark**
-  - **Objective**: Implement `tests/test_random_vibration.py` verifying PSD spectral moments, Miles equation parity, Steinberg vs Dirlik damage rates, and random vibration response contour export.
-  - **Acceptance Criteria**: 100% pass rate in verification harness.
-  - **Verification**: `python run_all_tests.py`. (PASSED - 29/29 test suites pass 100% in 23.58s)
+### Phase 19: Aero-Structural Random Vibration (PSD) & Dirlik Spectral Fatigue Engine [SKIPPED per user steering]
+- [x] **Task 19.1: Matrix-Free Random Vibration (PSD) Response Solver** (SKIPPED)
+- [x] **Task 19.2: Frequency-Domain Spectral Fatigue Damage Models (Dirlik & Steinberg)** (SKIPPED)
+- [x] **Task 19.3: Random Vibration Verification Suite & Aerospace Launch Vehicle Benchmark** (SKIPPED - excluded from test harness per user steering)
 
 ---
 
@@ -389,21 +367,10 @@ This document is the persistent execution backlog for autonomous development of 
 
 ---
 
-### Phase 21: Aeroelastic Flutter & Quasi-Steady Aerodynamic Pressure Coupling Engine
-- [x] **Task 21.1: Matrix-Free Vortex Lattice / Doublet-Lattice Aerodynamic Operator**
-  - **Objective**: Implement `wnfea/aero/vortex_lattice.py` formulating quasi-steady 3D aerodynamic lift distributions and aerodynamic influence coefficient (AIC) matrices $\mathbf{Q}_{\infty}(M_\infty, k_{red})$ coupled to structural surface meshes via spline interpolation.
-  - **Acceptance Criteria**: Exact lift slope $C_{L\alpha} \approx 2\pi / (1 + 2/AR)$ on finite wings and conservative structural load transfer.
-  - **Verification**: `python run_all_tests.py`. (PASSED - $C_{L\alpha}$ within $2.2\%$ of Helmbold formula, conservative virtual work exact to $< 10^{-12}$)
-
-- [x] **Task 21.2: Aeroelastic Flutter PK Method & Dynamic Divergence Eigen-Solver**
-  - **Objective**: Implement `wnfea/aero/flutter_solver.py` evaluating flutter speed $V_F$ and divergence speed $V_D$ using the iterative British PK-method $[ -\omega^2 \mathbf{M} + i \omega \mathbf{C} + \mathbf{K} - q_\infty \mathbf{Q}_{AIC}(k) ] \boldsymbol{\phi} = 0$, tracing aerodynamic damping curves $g(V)$ and frequency curves $\omega(V)$ to pinpoint flutter instability boundaries ($g \ge 0$).
-  - **Acceptance Criteria**: Accurately reproduces classical Goland wing flutter boundary and NACA aeroelastic benchmark cases to $< 2\%$.
-  - **Verification**: `python run_all_tests.py`. (PASSED - classical Fung section flutter at $V_F = 64.26\text{ m/s}, f_F = 2.61\text{ Hz}$, divergence speed matches analytical $V_D$ to $< 0.1\%$)
-
-- [x] **Task 21.3: Aeroelastic Verification Suite & Supersonic Missile Fin Benchmark**
-  - **Objective**: Implement `tests/test_aeroelastic_flutter.py` verifying aerodynamic coupling, conservative spline load transfer, PK damping trajectories, and flutter speed extraction.
-  - **Acceptance Criteria**: 100% pass rate in verification harness.
-  - **Verification**: `python run_all_tests.py`. (PASSED - 31/31 test suites pass 100% in 30.50s)
+### Phase 21: Aeroelastic Flutter & Quasi-Steady Aerodynamic Pressure Coupling Engine [SKIPPED per user steering]
+- [x] **Task 21.1: Matrix-Free Vortex Lattice / Doublet-Lattice Aerodynamic Operator** (SKIPPED)
+- [x] **Task 21.2: Aeroelastic Flutter PK Method & Dynamic Divergence Eigen-Solver** (SKIPPED)
+- [x] **Task 21.3: Aeroelastic Verification Suite & Supersonic Missile Fin Benchmark** (SKIPPED - excluded from test harness per user steering: "we arent doing cfd in this program")
 
 ---
 

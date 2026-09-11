@@ -31,7 +31,7 @@ TEST_SUITES = [
     ("FreeCAD B-Rep STEP Reconstruction & ParaView Pipeline", [sys.executable, os.path.join("tests", "test_cad_paraview_pipeline.py")]),
     ("Multi-Load Topology & 5-Axis CNC Optimization", [sys.executable, os.path.join("tests", "test_phase8_multiload_5axis.py")]),
     ("Matrix-Free Modal Dynamic Eigen-Solver & Octree AMR", [sys.executable, os.path.join("tests", "test_modal_analysis.py")]),
-    ("Thermal-Structural Conduction & Thermo-Mechanical Engine", [sys.executable, os.path.join("tests", "test_thermal_structural.py")]),
+    # ("Thermal-Structural Conduction & Thermo-Mechanical Engine", [sys.executable, os.path.join("tests", "test_thermal_structural.py")]),  # Skipped: Dont need thermal mechanical yet
     ("CAD-Conforming AMR Snapping & Stress Optimization", [sys.executable, os.path.join("tests", "test_stress_constrained_opt.py")]),
     ("Multi-Fidelity Voxel-to-AMR Iterative Adaptive Engine", [sys.executable, os.path.join("tests", "test_adaptive_subdomain_pipeline.py")]),
     ("Out-of-Core Streaming & Hierarchical Warm-Start", [sys.executable, os.path.join("tests", "test_outofcore_streaming_warmstart.py")]),
@@ -40,9 +40,9 @@ TEST_SUITES = [
     ("Multi-Material Optimization & Additive Manufacturing", [sys.executable, os.path.join("tests", "test_multi_material_am.py")]),
     ("Dynamic Frequency Optimization & Harmonic FRF", [sys.executable, os.path.join("tests", "test_modal_opt_harmonic.py")]),
     ("Aero-Structural Fatigue Life & Cyclic Damage Engine", [sys.executable, os.path.join("tests", "test_fatigue_life.py")]),
-    ("Aero-Structural Random Vibration & Spectral Fatigue", [sys.executable, os.path.join("tests", "test_random_vibration.py")]),
+    # ("Aero-Structural Random Vibration & Spectral Fatigue", [sys.executable, os.path.join("tests", "test_random_vibration.py")]),  # Skipped: unnecessary per user steering
     ("Functionally Graded TPMS & Microstructure Homogenization", [sys.executable, os.path.join("tests", "test_tpms_homogenization.py")]),
-    ("Aeroelastic Flutter & Vortex Lattice Aerodynamic Engine", [sys.executable, os.path.join("tests", "test_aeroelastic_flutter.py")]),
+    # ("Aeroelastic Flutter & Vortex Lattice Aerodynamic Engine", [sys.executable, os.path.join("tests", "test_aeroelastic_flutter.py")]),  # Skipped: not doing CFD in this program per user steering
     ("Non-Linear J2 Elasto-Plasticity & Isotropic Hardening", [sys.executable, os.path.join("tests", "test_elasto_plasticity.py")]),
 ]
 
