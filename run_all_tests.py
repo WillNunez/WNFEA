@@ -42,8 +42,8 @@ TEST_SUITES = [
     ("Aero-Structural Fatigue Life & Cyclic Damage Engine", [sys.executable, os.path.join("tests", "test_fatigue_life.py")]),
     # ("Aero-Structural Random Vibration & Spectral Fatigue", [sys.executable, os.path.join("tests", "test_random_vibration.py")]),  # Skipped: unnecessary per user steering
     ("Functionally Graded TPMS & Microstructure Homogenization", [sys.executable, os.path.join("tests", "test_tpms_homogenization.py")]),
-    # ("Aeroelastic Flutter & Vortex Lattice Aerodynamic Engine", [sys.executable, os.path.join("tests", "test_aeroelastic_flutter.py")]),  # Skipped: not doing CFD in this program per user steering
     ("Non-Linear J2 Elasto-Plasticity & Isotropic Hardening", [sys.executable, os.path.join("tests", "test_elasto_plasticity.py")]),
+    ("Total Lagrangian Large Deflection & Geometric Non-Linearity", [sys.executable, os.path.join("tests", "test_large_deflection.py")]),
 ]
 
 

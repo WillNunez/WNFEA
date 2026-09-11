@@ -76,6 +76,12 @@ from .plasticity_solver import (
     solve_elastoplastic_increments,
 )
 
+from .large_deflection import (
+    LargeDeflectionStepResult,
+    LargeDeflectionSolveResult,
+    solve_large_deflection_increments,
+)
+
 __all__ = [
     "BeamSolver",
     "SolverError",
@@ -128,5 +134,10 @@ __all__ = [
     "ElastoPlasticStepResult",
     "ElastoPlasticSolveResult",
     "solve_elastoplastic_increments",
+    "LargeDeflectionStepResult",
+    "LargeDeflectionSolveResult",
+    "solve_large_deflection_increments",
 ]
+
+
 
