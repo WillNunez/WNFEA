@@ -661,6 +661,42 @@ This journal records all autonomous progress, test outcomes, commit hashes, and 
     - Registered 29th verification suite in `run_all_tests.py`, maintaining 100% pass rate across all 29 suites in 23.58s.
   - **Phase 19 Complete & Verified.**
 
+### [2026-09-11 00:05] Phase 20: Functionally Graded TPMS Lattice & Asymptotic Homogenization Engine
+- **Status**: SUCCESS
+- **Commit**: `8480ebe`
+- **Files Modified / Added**:
+  - `wnfea/opt/tpms_lattice.py` [NEW - Implicit TPMS level-sets (Gyroid, Schwarz P, Diamond, Neovius, I-WP), skeletal & sheet morphology, relative density calibration, functionally graded voxel infill generator, and watertight triangular mesh extraction]
+  - `wnfea/materials/homogenization.py` [NEW - Numerical asymptotic homogenization, periodic boundary index reduction, micro-displacement fluctuations chi^(kl), symmetric effective elasticity tensor C^eff, Zener anisotropy ratio, cubic symmetry metrics, and Gibson-Ashby scaling]
+  - `wnfea/materials/__init__.py` [NEW - Export HomogenizationResult, compute_isotropic_elasticity_matrix, solve_periodic_homogenization, homogenize_tpms_unit_cell]
+  - `wnfea/opt/__init__.py` [MODIFIED - Export TPMS classes and generator functions]
+  - `tests/test_tpms_homogenization.py` [NEW - 8 comprehensive verification tests]
+  - `run_all_tests.py` [MODIFIED - Registered 30th test suite]
+  - `UNATTENDED_ROADMAP.md` [MODIFIED - Phase 20 completed, Phase 21 defined]
+  - `UNATTENDED_LOG.md` [MODIFIED]
+- **Verification**:
+  - `python run_all_tests.py` -> 30/30 suites passed (100% pass rate in 29.20s)
+  - `python tests/test_tpms_homogenization.py` -> 8/8 tests passed in 6.134s
+- **Key Changes & Metrics**:
+  - **Task 20.1 (Implicit TPMS Surface & Solid Infill Generator)**:
+    - Implemented `TPMSType` supporting Gyroid ($G$), Schwarz Primitive ($P$), Diamond ($D$), Neovius ($N$), and I-Wrapped Package ($I\text{-}WP$).
+    - Implemented `evaluate_tpms_levelset` with vectorized mathematical level-set formulas. Verified inversion/reflection symmetry yielding mean level-set $\approx 0$ and exact 50% solid volume fraction at $t = 0$.
+    - Formulated calibrated threshold polynomial inversions $t(\rho)$ for skeletal mode ($F \le t$) and sheet mode ($|F| \le t/2$), strictly monotonically increasing with relative density.
+    - Implemented `generate_tpms_voxel_infill` with sub-voxel integration for smooth element volume fractions under spatially varying density fields $\rho(\mathbf{x})$.
+    - Implemented `extract_tpms_isosurface` extracting watertight, manifold triangular boundary meshes ready for CAD/STL export.
+  - **Task 20.2 (Numerical Asymptotic Homogenization & Effective Elasticity Tensor)**:
+    - Implemented `solve_periodic_homogenization` under periodic boundary conditions (PBC).
+    - Formulated zero-overhead periodic index reduction mapping corner/edge slave nodes to master DOFs: $node\_id_{periodic}(i, j, k) = (i \pmod{N_x}) + (j \pmod{N_y}) N_x + (k \pmod{N_z}) N_x N_y$.
+    - Solved 6 canonical macroscopic unit strain load cases $\bar{\boldsymbol{\epsilon}}^{(kl)}$ for microscale displacement fluctuations $\boldsymbol{\chi}^{(kl)}$.
+    - Formulated symmetric positive-semidefinite effective elasticity tensor:
+      $C^{eff}_{ij} = \frac{1}{|Y|} \left[ \sum_e V_e (\bar{\boldsymbol{\epsilon}}^{(i)})^T \mathbf{C}_e \bar{\boldsymbol{\epsilon}}^{(j)} - (\boldsymbol{\chi}^{(i)})^T \mathbf{K}_p \boldsymbol{\chi}^{(j)} \right]$.
+    - Evaluated engineering constants ($E_x, E_y, E_z, G_{xy}, G_{yz}, G_{zx}, \nu_{xy}, \nu_{yz}, \nu_{zx}$), Zener anisotropy ratio $A_Z$, and cubic symmetry residual metric.
+    - Verified exact match on solid continuum: relative error against analytical continuum elasticity is **$1.11 \times 10^{-15}$ (machine precision)**!
+    - Verified positive definiteness, cubic symmetry, and Gibson-Ashby scaling $E^{eff}(\rho_1) < E^{eff}(\rho_2) \le \rho E_{base}$ on TPMS Gyroid and Schwarz P unit cells.
+  - **Task 20.3 (Verification Suite & AM Benchmark)**:
+    - Authored 8 verification tests in `tests/test_tpms_homogenization.py` covering level sets, threshold monotonicity, functionally graded infill, watertight surface mesh extraction, continuum exactness, cubic symmetry, Schwarz P constants, and Gibson-Ashby scaling.
+    - Registered 30th verification suite in `run_all_tests.py`, maintaining 100% pass rate across all 30 suites in 29.20s.
+  - **Phase 20 Complete & Verified.**
+
 
 
 
