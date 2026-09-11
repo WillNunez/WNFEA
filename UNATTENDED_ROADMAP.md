@@ -407,20 +407,20 @@ This document is the persistent execution backlog for autonomous development of 
 
 ---
 
-### Phase 22: Non-Linear Finite-Strain Hyperelasticity & Rubber Viscoelasticity Engine
-- [ ] **Task 22.1: Finite-Strain Kinematics & Strain Energy Potentials (Neo-Hookean & Mooney-Rivlin)**
-  - **Objective**: Implement `wnfea/materials/hyperelastic.py` formulating deformation gradient tensor $\mathbf{F} = \mathbf{I} + \nabla \mathbf{u}$, right Cauchy-Green tensor $\mathbf{C} = \mathbf{F}^T \mathbf{F}$, Green-Lagrange strain $\mathbf{E} = \frac{1}{2}(\mathbf{C} - \mathbf{I})$, and strain invariants ($I_1, I_2, J$). Formulate Second Piola-Kirchhoff (PK2) stress $\mathbf{S} = 2 \frac{\partial W}{\partial \mathbf{C}}$ and spatial tangent modulus $\mathbb{C}_{ijkl}$ for compressible/incompressible Neo-Hookean, Mooney-Rivlin, and Yeoh rubber models.
-  - **Acceptance Criteria**: Exact stress and tangent elasticity tensor matches analytical derivatives to $< 10^{-10}$ error; exact recovery of infinitesimal linear elasticity as $\mathbf{F} \to \mathbf{I}$.
+### Phase 22: Non-Linear J2 von Mises Elasto-Plasticity & Isotropic Hardening Engine for Metals
+- [ ] **Task 22.1: Rate-Independent J2 Plasticity & Isotropic Hardening Models (Linear, Voce, Swift)**
+  - **Objective**: Implement `wnfea/materials/plasticity.py` formulating the von Mises yield criterion $f(\boldsymbol{\sigma}, \bar{\epsilon}^p) = \sigma_{vm} - \sigma_y(\bar{\epsilon}^p) \le 0$ with associative plastic flow $\dot{\boldsymbol{\epsilon}}^p = \dot{\gamma} \mathbf{N}$. Implement linear isotropic hardening ($H = \frac{E E_t}{E - E_t}$), Voce non-linear saturation hardening ($\sigma_y = \sigma_{y0} + R_\infty (1 - e^{-b \bar{\epsilon}^p})$), and Swift power-law hardening. Provide presets for Al 6061-T6, Al 7075-T6, Ti-6Al-4V, and Structural Steel S355.
+  - **Acceptance Criteria**: Uniaxial tension matches analytical bilinear / Voce curves; pure shear yields at exact $\tau_y = \sigma_{y0} / \sqrt{3}$.
   - **Verification**: `python run_all_tests.py`.
 
-- [ ] **Task 22.2: Matrix-Free Non-Linear Total Lagrangian Newton-Raphson Solver**
-  - **Objective**: Implement `wnfea/solver/hyperelastic_solver.py` evaluating geometric and material tangent stiffness actions $\mathbf{K}_t(\mathbf{u}) \mathbf{v}$ without matrix assembly, coupled with line-search Newton-Raphson iterations and arc-length continuation for large finite strain deformations (>100% stretch).
-  - **Acceptance Criteria**: Quadratic asymptotic convergence $\|R_{k+1}\| \le c \|R_k\|^2$ under finite rotations and large tensile stretch.
+- [ ] **Task 22.2: Vectorized Radial Return Mapping & Consistent Algorithmic Tangent Operator**
+  - **Objective**: Implement implicit backward-Euler radial return mapping evaluating elastic trial stress, consistency parameter $\Delta \gamma$, plastic strain tensor updates, and exact consistent algorithmic tangent modulus $\mathbf{C}^{ep} = \frac{\partial \boldsymbol{\sigma}_{n+1}}{\partial \boldsymbol{\epsilon}_{n+1}}$ preserving quadratic Newton-Raphson convergence.
+  - **Acceptance Criteria**: Algorithmic tangent matches numerical finite-difference perturbation to $< 10^{-6}$; exact preservation of plastic incompressibility $\text{tr}(\Delta \boldsymbol{\epsilon}^p) = 0$.
   - **Verification**: `python run_all_tests.py`.
 
-- [ ] **Task 22.3: Hyperelastic Verification Suite & Elastomeric Seal Benchmark**
-  - **Objective**: Implement `tests/test_hyperelastic_visco.py` verifying strain energy potentials, PK2 stress tensors, finite rotation frame indifference, and rubber seal compression.
-  - **Acceptance Criteria**: 100% pass rate in verification harness.
+- [ ] **Task 22.3: Non-Linear Incremental Elasto-Plastic Solver & Plastic Bending Benchmark**
+  - **Objective**: Implement `wnfea/solver/plasticity_solver.py` and `tests/test_elasto_plasticity.py` providing incremental load stepping with full Newton-Raphson equilibrium iterations, residual convergence monitoring, and permanent plastic strain tracking under cyclic loading, unloading, and springback.
+  - **Acceptance Criteria**: 100% pass rate in verification harness across all 32 suites.
   - **Verification**: `python run_all_tests.py`.
 
 
