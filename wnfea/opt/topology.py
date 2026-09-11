@@ -80,12 +80,14 @@ class TopologyOptimizer:
         nu: float = 0.3,
         passive_solid: Optional[Sequence[int]] = None,
         passive_void: Optional[Sequence[int]] = None,
+        initial_density: Optional[Sequence[float]] = None,
     ):
         self.grid = grid
         self.fixed_dofs = list(fixed_dofs)
         self.config = config or TopologyConfig()
         self.E = float(E)
         self.nu = float(nu)
+        self.initial_density = np.asarray(initial_density, dtype=np.float64) if initial_density is not None else None
 
         # Multi-load case processing
         if isinstance(forces, np.ndarray) and forces.ndim == 1:
@@ -145,8 +147,11 @@ class TopologyOptimizer:
         cfg = self.config
         t_start = time.perf_counter()
 
-        # 1. Initialize design densities to target volume fraction
-        rho = np.full(self.n_elements, cfg.target_volume_fraction, dtype=np.float64)
+        # 1. Initialize design densities to initial_density or target volume fraction
+        if self.initial_density is not None:
+            rho = np.clip(self.initial_density.copy(), 1e-3, 1.0)
+        else:
+            rho = np.full(self.n_elements, cfg.target_volume_fraction, dtype=np.float64)
         rho[self.passive_solid_mask] = 1.0
         rho[self.passive_void_mask] = 0.0
 

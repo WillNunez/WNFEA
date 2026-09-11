@@ -65,6 +65,13 @@ from .tpms_lattice import (
     extract_tpms_isosurface,
 )
 
+from .evolutionary import (
+    GenerativeGenome,
+    EvolutionaryRunResult,
+    EvolutionaryTopologyOptimizer,
+    compute_phenotypic_distance,
+)
+
 __all__ = [
     "TopologyOptimizer",
     "TopologyConfig",
@@ -102,5 +109,9 @@ __all__ = [
     "evaluate_graded_tpms_field",
     "generate_tpms_voxel_infill",
     "extract_tpms_isosurface",
+    "GenerativeGenome",
+    "EvolutionaryRunResult",
+    "EvolutionaryTopologyOptimizer",
+    "compute_phenotypic_distance",
 ]
 

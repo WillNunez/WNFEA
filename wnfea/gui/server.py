@@ -24,6 +24,7 @@ from ..opt.topology import TopologyOptimizer, TopologyConfig, OptimizationResult
 from ..opt.machinability import CNCMillingConstraint
 from ..cad.isosurface import extract_isosurface_mesh, TriangularMesh
 from ..cad.brep_reconstruction import BRepReconstructor, CylindricalFeature
+from ..opt.evolutionary import EvolutionaryTopologyOptimizer, EvolutionaryRunResult
 
 
 MATERIALS_DB: Dict[str, Dict[str, Any]] = {
@@ -179,6 +180,7 @@ class OptimizationJob:
         self.stl_path: Optional[str] = None
         self.step_path: Optional[str] = None
         self.vtu_path: Optional[str] = None
+        self.candidates_5: List[Dict[str, Any]] = []
 
     def reset(self, config_params: Dict[str, Any]):
         with self.lock:
@@ -201,6 +203,7 @@ class OptimizationJob:
             self.stl_path = None
             self.step_path = None
             self.vtu_path = None
+            self.candidates_5.clear()
 
     def get_status(self) -> Dict[str, Any]:
         with self.lock:
@@ -221,6 +224,11 @@ class OptimizationJob:
                 "has_stl": self.stl_path is not None and os.path.exists(self.stl_path),
                 "has_step": self.step_path is not None and os.path.exists(self.step_path),
                 "has_vtu": self.vtu_path is not None and os.path.exists(self.vtu_path),
+                "has_candidates": len(self.candidates_5) > 0,
+                "candidates": [
+                    {k: v for k, v in c.items() if k not in ("vertices", "faces")}
+                    for c in self.candidates_5
+                ],
             }
 
 
@@ -486,6 +494,89 @@ def run_optimization_worker(config: Dict[str, Any]):
             job.elapsed_time = time.time() - start_time
 
 
+def run_evolutionary_worker(config: Dict[str, Any]):
+    """Background worker executing the 5-candidate evolutionary generative pipeline."""
+    job = GLOBAL_JOB
+    start_time = time.time()
+    try:
+        dim = config.get("dimensions", {"lx": 0.300, "ly": 0.100, "lz": 0.036})
+        res = config.get("resolution", {"nx": 30, "ny": 12, "nz": 6})
+        mat_id = config.get("material_id", "al6061_t6")
+        mat_info = MATERIALS_DB.get(mat_id, MATERIALS_DB["al6061_t6"])
+
+        with job.lock:
+            job.status_text = "Initializing Evolutionary Problem & 5g Load Envelopes..."
+
+        grid, load_cases, load_weights, fixed_dofs, p_solid, p_void = build_model_car_chassis_problem(
+            lx=dim["lx"],
+            ly=dim["ly"],
+            lz=dim["lz"],
+            nx=res["nx"],
+            ny=res["ny"],
+            nz=res["nz"],
+            mat_id=mat_id,
+        )
+        job.grid = grid
+
+        engine = EvolutionaryTopologyOptimizer(
+            grid=grid,
+            load_cases=load_cases,
+            fixed_dofs=fixed_dofs,
+            E=mat_info["E"],
+            nu=mat_info["nu"],
+            material_density=mat_info["density"],
+            passive_solid=p_solid,
+            passive_void=p_void,
+            inner_iterations=12,
+        )
+
+        with job.lock:
+            job.status_text = "Synthesizing 5 Diverse Archetypes via Quality-Diversity..."
+
+        run_res = engine.generate_5_diverse_solutions()
+
+        candidates_payload = []
+        export_dir = os.path.join(tempfile.gettempdir(), "wnfea_gui_exports")
+        os.makedirs(export_dir, exist_ok=True)
+
+        for c in run_res.candidates:
+            mesh = extract_isosurface_mesh(grid, c.densities, isovalue=0.50, smoothing_iters=4, smoothing_factor=0.35)
+            stl_path = os.path.join(export_dir, f"candidate_{c.id}_{c.archetype_name.replace(' ', '_')}.stl")
+            mesh.write_stl(stl_path, binary=True)
+
+            candidates_payload.append({
+                "id": c.id,
+                "name": c.archetype_name,
+                "mass_grams": c.mass_grams,
+                "volume_fraction": round(c.achieved_volume_fraction, 4),
+                "compliance": round(c.compliance, 6),
+                "machinability": c.machinability_score,
+                "torsion_score": c.torsional_stiffness_score,
+                "seed": c.seed_morphology,
+                "vertices": mesh.vertices.tolist(),
+                "faces": mesh.faces.tolist(),
+                "stl_path": stl_path,
+            })
+
+        with job.lock:
+            job.candidates_5 = candidates_payload
+            job.mesh_vertices = candidates_payload[0]["vertices"]
+            job.mesh_faces = candidates_payload[0]["faces"]
+            job.stl_path = candidates_payload[0]["stl_path"]
+            job.is_running = False
+            job.is_completed = True
+            job.elapsed_time = time.time() - start_time
+            job.status_text = f"5 Diverse Solutions successfully synthesized in {job.elapsed_time:.1f}s!"
+
+    except Exception as e:
+        with job.lock:
+            job.is_running = False
+            job.is_completed = False
+            job.error_message = str(e)
+            job.status_text = f"Evolutionary Error: {e}"
+            job.elapsed_time = time.time() - start_time
+
+
 class WNFEAHttpHandler(BaseHTTPRequestHandler):
     """
     HTTP Request Handler serving WNFEA Generative Design Web Studio.
@@ -562,6 +653,34 @@ class WNFEAHttpHandler(BaseHTTPRequestHandler):
             self._send_json(data)
             return
 
+        if path == "/api/candidates":
+            with GLOBAL_JOB.lock:
+                data = [
+                    {k: v for k, v in c.items() if k not in ("vertices", "faces")}
+                    for c in GLOBAL_JOB.candidates_5
+                ]
+            self._send_json(data)
+            return
+
+        if path == "/api/candidate_mesh":
+            cid = int(query.get("id", ["1"])[0])
+            with GLOBAL_JOB.lock:
+                cand = next((c for c in GLOBAL_JOB.candidates_5 if c["id"] == cid), None)
+                if not cand or "vertices" not in cand:
+                    self._send_json({"error": f"Candidate {cid} not found"}, status_code=404)
+                    return
+                data = {
+                    "id": cand["id"],
+                    "name": cand["name"],
+                    "mass_grams": cand["mass_grams"],
+                    "compliance": cand["compliance"],
+                    "machinability": cand["machinability"],
+                    "vertices": cand["vertices"],
+                    "faces": cand["faces"],
+                }
+            self._send_json(data)
+            return
+
         if path == "/api/export":
             fmt = query.get("format", ["stl"])[0].lower()
             with GLOBAL_JOB.lock:
@@ -627,6 +746,36 @@ class WNFEAHttpHandler(BaseHTTPRequestHandler):
                 "message": "Optimization job started successfully",
                 "status": "running",
                 "max_iterations": config_data.get("max_iterations", 25),
+            })
+            return
+
+        if path == "/api/generate_5_solutions":
+            if GLOBAL_JOB.is_running:
+                self._send_json({"error": "An optimization job is already running"}, status_code=409)
+                return
+
+            content_length = int(self.headers.get("Content-Length", 0))
+            body = self.rfile.read(content_length)
+            try:
+                config_data = json.loads(body.decode("utf-8")) if body else {}
+            except Exception:
+                config_data = {}
+
+            if not config_data:
+                config_data = PRESETS_DB["model_car_chassis_300mm"]
+
+            GLOBAL_JOB.reset(config_data)
+
+            worker_thread = threading.Thread(
+                target=run_evolutionary_worker,
+                args=(config_data,),
+                daemon=True,
+            )
+            worker_thread.start()
+
+            self._send_json({
+                "message": "5-Candidate Evolutionary Generative Studio started successfully",
+                "status": "running",
             })
             return
 

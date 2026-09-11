@@ -210,11 +210,18 @@
         </div>
       </section>
 
-      <!-- Action Button -->
-      <button id="btn-start" class="w-full py-3 bg-gradient-to-r from-teal-500 to-emerald-600 hover:from-teal-600 hover:to-emerald-700 text-slate-900 font-bold rounded-lg shadow-lg flex items-center justify-center space-x-2 transition-all">
-        <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M14.752 11.168l-3.197-2.132A1 1 0 0010 9.87v4.263a1 1 0 001.555.832l3.197-2.132a1 1 0 000-1.664z"></path><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M21 12a9 9 0 11-18 0 9 9 0 0118 0z"></path></svg>
-        <span>Generate 3-Axis Chassis</span>
-      </button>
+      <!-- Action Buttons -->
+      <div class="space-y-2">
+        <button id="btn-start" class="w-full py-2.5 bg-gradient-to-r from-teal-500 to-emerald-600 hover:from-teal-600 hover:to-emerald-700 text-slate-900 font-bold rounded-lg shadow-lg flex items-center justify-center space-x-2 transition-all text-xs uppercase tracking-wider">
+          <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M14.752 11.168l-3.197-2.132A1 1 0 0010 9.87v4.263a1 1 0 001.555.832l3.197-2.132a1 1 0 000-1.664z"></path><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M21 12a9 9 0 11-18 0 9 9 0 0118 0z"></path></svg>
+          <span>Generate 3-Axis Chassis</span>
+        </button>
+
+        <button id="btn-start-5" class="w-full py-2.5 bg-gradient-to-r from-amber-500 to-orange-600 hover:from-amber-600 hover:to-orange-700 text-slate-900 font-bold rounded-lg shadow-lg flex items-center justify-center space-x-2 transition-all text-xs uppercase tracking-wider">
+          <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19.428 15.428a2 2 0 00-1.022-.547l-2.387-.477a6 6 0 00-3.86.517l-.318.158a6 6 0 01-3.86.517L6.05 15.21a2 2 0 00-1.806.547M8 4h8l-1 1v5.172a2 2 0 00.586 1.414l5 5c1.26 1.26.367 3.414-1.415 3.414H4.828c-1.782 0-2.674-2.154-1.414-3.414l5-5A2 2 0 009 10.172V5L8 4z"></path></svg>
+          <span>Synthesize 5 Diverse Solutions (EA)</span>
+        </button>
+      </div>
 
       <!-- Export Actions -->
       <div class="pt-2 border-t border-bordercol space-y-2">
@@ -264,6 +271,36 @@
       <div id="status-pill" class="flex items-center space-x-2 text-xs">
         <span id="status-dot" class="w-2.5 h-2.5 rounded-full bg-emerald-500 animate-pulse"></span>
         <span id="status-label" class="text-slate-300">Ready</span>
+      </div>
+    </div>
+
+    <!-- 5 Generative Candidates Switcher Bar -->
+    <div id="candidate-bar" class="bg-slate-900/90 border-b border-bordercol px-4 py-2 flex items-center justify-between z-10">
+      <div class="flex items-center space-x-2">
+        <span class="text-xs font-bold uppercase tracking-wider text-amber-400 flex items-center">
+          <svg class="w-3.5 h-3.5 mr-1" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19.428 15.428a2 2 0 00-1.022-.547l-2.387-.477a6 6 0 00-3.86.517l-.318.158a6 6 0 01-3.86.517L6.05 15.21a2 2 0 00-1.806.547M8 4h8l-1 1v5.172a2 2 0 00.586 1.414l5 5c1.26 1.26.367 3.414-1.415 3.414H4.828c-1.782 0-2.674-2.154-1.414-3.414l5-5A2 2 0 009 10.172V5L8 4z"></path></svg>
+          Autodesk Generative Design Archetypes:
+        </span>
+        <div id="candidate-tabs" class="flex space-x-1.5">
+          <button data-id="1" class="cand-tab px-2.5 py-1 rounded text-xs font-semibold bg-amber-500/20 text-amber-300 border border-amber-500/50 hover:bg-amber-500/30 transition-all">
+            1. Torsional Specialist (869g)
+          </button>
+          <button data-id="2" class="cand-tab px-2.5 py-1 rounded text-xs font-semibold bg-slate-800 text-slate-300 border border-slate-700 hover:bg-slate-700 transition-all">
+            2. CNC Champion (935g)
+          </button>
+          <button data-id="3" class="cand-tab px-2.5 py-1 rounded text-xs font-semibold bg-slate-800 text-slate-300 border border-slate-700 hover:bg-slate-700 transition-all">
+            3. Ultra-Light (648g)
+          </button>
+          <button data-id="4" class="cand-tab px-2.5 py-1 rounded text-xs font-semibold bg-slate-800 text-slate-300 border border-slate-700 hover:bg-slate-700 transition-all">
+            4. Perimeter-Sill (818g)
+          </button>
+          <button data-id="5" class="cand-tab px-2.5 py-1 rounded text-xs font-semibold bg-slate-800 text-slate-300 border border-slate-700 hover:bg-slate-700 transition-all">
+            5. Balanced 5g (816g)
+          </button>
+        </div>
+      </div>
+      <div id="active-candidate-badge" class="text-[11px] font-mono text-teal-400 bg-teal-950/60 px-2 py-0.5 rounded border border-teal-800/60">
+        Active: Candidate 1 (Torsional Specialist)
       </div>
     </div>
 
@@ -745,6 +782,117 @@
       } catch (e) {
         console.error("Failed to fetch mesh:", e);
       }
+    }
+
+    // --- CANDIDATE SWITCHER LOGIC ---
+    const candidateTabs = document.querySelectorAll('.cand-tab');
+    const activeCandidateBadge = document.getElementById('active-candidate-badge');
+
+    candidateTabs.forEach(tab => {
+      tab.addEventListener('click', async () => {
+        const id = tab.getAttribute('data-id');
+        selectCandidate(id, tab);
+      });
+    });
+
+    async function selectCandidate(id, tabElement) {
+      // Update UI active tab state
+      candidateTabs.forEach(t => {
+        t.className = 'cand-tab px-2.5 py-1 rounded text-xs font-semibold bg-slate-800 text-slate-300 border border-slate-700 hover:bg-slate-700 transition-all';
+      });
+      if (tabElement) {
+        tabElement.className = 'cand-tab px-2.5 py-1 rounded text-xs font-semibold bg-amber-500/20 text-amber-300 border border-amber-500/50 hover:bg-amber-500/30 transition-all';
+      }
+
+      try {
+        const res = await fetch(`/api/candidate_mesh?id=${id}`);
+        if (!res.ok) return;
+        const data = await res.json();
+
+        // Update 3D viewport
+        if (data.vertices && data.faces) {
+          renderChassisGeometry(data.vertices, data.faces);
+        }
+
+        // Update telemetry metrics
+        if (data.mass_grams) {
+          document.getElementById('metric-opt-mass').innerText = Math.round(data.mass_grams);
+        }
+        if (data.compliance) {
+          document.getElementById('metric-compliance').innerText = data.compliance.toFixed(4);
+        }
+        activeCandidateBadge.innerText = `Active: Candidate ${id} (${data.name})`;
+      } catch (e) {
+        console.error("Failed to load candidate:", e);
+      }
+    }
+
+    // --- 5-SOLUTION GENERATION ---
+    const btnStart5 = document.getElementById('btn-start-5');
+    btnStart5.onclick = async () => {
+      const payload = {
+        dimensions: {
+          lx: parseFloat(document.getElementById('dim-lx').value) / 1000.0,
+          ly: parseFloat(document.getElementById('dim-ly').value) / 1000.0,
+          lz: parseFloat(document.getElementById('dim-lz').value) / 1000.0,
+        },
+        resolution: {
+          nx: 30,
+          ny: 12,
+          nz: 6,
+        },
+        material_id: document.getElementById('material-selector').value,
+      };
+
+      loadingOverlay.classList.remove('hidden');
+      document.getElementById('overlay-text').innerText = 'Synthesizing 5 Diverse Archetypes...';
+      document.getElementById('overlay-subtext').innerText = 'Outer Quality-Diversity (MAP-Elites) & Inner 3-Axis SIMP Engines';
+      statusLabel.innerText = 'Evolutionary TopOpt Running...';
+      statusDot.className = 'w-2.5 h-2.5 rounded-full bg-amber-500 animate-ping';
+
+      try {
+        const res = await fetch('/api/generate_5_solutions', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(payload),
+        });
+
+        if (!res.ok) {
+          const err = await res.json();
+          alert('Error: ' + (err.error || 'Failed to start'));
+          loadingOverlay.classList.add('hidden');
+          return;
+        }
+
+        pollEvolutionaryStatus();
+      } catch (e) {
+        alert('Evolutionary request error: ' + e);
+        loadingOverlay.classList.add('hidden');
+      }
+    };
+
+    async function pollEvolutionaryStatus() {
+      const interval = setInterval(async () => {
+        try {
+          const res = await fetch('/api/status');
+          const data = await res.json();
+
+          document.getElementById('overlay-text').innerText = data.status_text || 'Synthesizing 5 Archetypes...';
+
+          if (data.is_completed || !data.is_running) {
+            clearInterval(interval);
+            loadingOverlay.classList.add('hidden');
+            statusLabel.innerText = '5 Generative Archetypes Ready';
+            statusDot.className = 'w-2.5 h-2.5 rounded-full bg-emerald-500';
+
+            // Fetch candidate 1 by default
+            const firstTab = document.querySelector('.cand-tab[data-id="1"]');
+            selectCandidate("1", firstTab);
+          }
+        } catch (e) {
+          console.error(e);
+        }
+      }, 1000);
     }
 
     // Export Buttons
