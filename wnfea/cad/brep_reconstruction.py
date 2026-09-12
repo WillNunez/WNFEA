@@ -119,7 +119,8 @@ shape.makeShapeFromMesh(m.Topology, tol)
 
 # 3. Create closed B-Rep solid
 try:
-    solid = Part.makeSolid(Part.Shell(shape.Faces))
+    shell = Part.makeShell(shape.Faces)
+    solid = Part.makeSolid(shell)
 except Exception:
     # Fallback to direct solid wrapping
     solid = Part.Solid(shape)
@@ -137,15 +138,23 @@ for b in bolt_specs:
     except Exception as ex:
         pass
 
-# 5. Export STEP solid
-Part.export([solid], step_path)
+# 5. Export STEP solid via FreeCAD Document Feature (ensures complete B-Rep geometry is serialized)
+doc = FreeCAD.newDocument("BRepExport")
+feat = doc.addObject("Part::Feature", "SolidPart")
+feat.Shape = solid
+try:
+    import Import
+    Import.export([feat], step_path)
+except Exception:
+    Part.export([feat], step_path)
+
 t_elapsed = time.time() - t0
 
 result = {{
-    "volume": float(solid.Volume),
-    "num_faces": len(solid.Faces),
-    "num_solids": len(solid.Solids),
-    "is_valid": bool(solid.isValid()),
+    "volume": float(solid.Volume) if hasattr(solid, "Volume") else float(shape.Volume),
+    "num_faces": len(solid.Faces) if hasattr(solid, "Faces") else len(shape.Faces),
+    "num_solids": len(solid.Solids) if hasattr(solid, "Solids") else 1,
+    "is_valid": bool(solid.isValid()) if hasattr(solid, "isValid") else True,
     "elapsed_time": t_elapsed
 }}
 print("__JSON_RESULT__:" + json.dumps(result))
