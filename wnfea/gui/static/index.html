@@ -908,6 +908,12 @@
     document.getElementById('btn-export-vtu').onclick = () => {
       window.location.href = '/api/export?format=vtu';
     };
+
+    // Auto-load Candidate 1 on startup if available
+    window.addEventListener('DOMContentLoaded', () => {
+      const firstTab = document.querySelector('.cand-tab[data-id="1"]');
+      selectCandidate("1", firstTab);
+    });
   </script>
 </body>
 </html>

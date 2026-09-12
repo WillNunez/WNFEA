@@ -234,6 +234,84 @@ class OptimizationJob:
 
 GLOBAL_JOB = OptimizationJob()
 
+def _preload_existing_solutions(job: OptimizationJob):
+    """Pre-load existing case study outputs into GLOBAL_JOB so GUI opens with ready 3D models."""
+    import struct
+    base_dir = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
+    chassis_dir = os.path.join(base_dir, "output", "model_car_chassis")
+    stl_path = os.path.join(chassis_dir, "model_car_chassis_6061_3axis.stl")
+    step_path = os.path.join(chassis_dir, "model_car_chassis_6061_3axis.step")
+    vtu_path = os.path.join(chassis_dir, "model_car_chassis_6061_3axis.vtu")
+
+    def _read_stl_geom(path: str):
+        if not os.path.exists(path):
+            return None, None
+        try:
+            with open(path, "rb") as fp:
+                fp.seek(80)
+                n_tri = struct.unpack("<I", fp.read(4))[0]
+                data = np.frombuffer(fp.read(n_tri * 50), dtype=[
+                    ("norm", "<f4", 3), ("v0", "<f4", 3), ("v1", "<f4", 3), ("v2", "<f4", 3), ("attr", "<u2")
+                ])
+            pts = np.vstack([data["v0"], data["v1"], data["v2"]])
+            u, inv = np.unique(pts, axis=0, return_inverse=True)
+            return u.tolist(), inv.reshape(-1, 3).tolist()
+        except Exception:
+            return None, None
+
+    # Load 5 evolutionary solutions
+    solutions_dir = os.path.join(base_dir, "output", "model_car_chassis_5_solutions")
+    sum_json = os.path.join(solutions_dir, "chassis_5_solutions_summary.json")
+    if os.path.exists(sum_json):
+        try:
+            with open(sum_json, "r", encoding="utf-8") as fp:
+                meta = json.load(fp)
+            cands = []
+            for c in meta.get("candidates", []):
+                v, f = _read_stl_geom(c["stl_filepath"])
+                if v and f:
+                    cands.append({
+                        "id": c["candidate_id"],
+                        "name": c["archetype"],
+                        "mass_grams": c["mass_grams"],
+                        "compliance": c["compliance_joules"],
+                        "machinability": c.get("machinability_score_percent", 99.0),
+                        "vertices": v,
+                        "faces": f,
+                        "stl_path": c["stl_filepath"],
+                        "step_path": c.get("step_filepath"),
+                    })
+            if cands:
+                with job.lock:
+                    job.candidates_5 = cands
+                    job.mesh_vertices = cands[0]["vertices"]
+                    job.mesh_faces = cands[0]["faces"]
+                    job.stl_path = cands[0]["stl_path"]
+                    job.step_path = cands[0]["step_path"]
+                    job.status_text = "5 Distinct Generative Chassis Archetypes Ready"
+                    job.is_completed = True
+        except Exception:
+            pass
+
+    # Fallback to single chassis if no candidates
+    if not job.mesh_vertices and os.path.exists(stl_path):
+        v, f = _read_stl_geom(stl_path)
+        if v and f:
+            with job.lock:
+                job.mesh_vertices = v
+                job.mesh_faces = f
+                job.stl_path = stl_path
+                job.step_path = step_path
+                job.vtu_path = vtu_path
+                job.status_text = "300mm 6061 Chassis Loaded (3-Axis Machinable)"
+                job.is_completed = True
+
+try:
+    _preload_existing_solutions(GLOBAL_JOB)
+except Exception:
+    pass
+
+
 
 def build_model_car_chassis_problem(
     lx: float = 0.300,
